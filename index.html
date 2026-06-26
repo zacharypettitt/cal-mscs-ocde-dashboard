@@ -39,6 +39,24 @@ const _auth = firebase.auth();
 const _col  = (doc) => _db.collection('shared').doc(doc);
 
 // Firestore write helpers
+// ── Activity logging helpers ──────────────────────────────────────────────────
+function logActivity(action,description,details){
+  var u=_auth.currentUser;if(!u)return;
+  _db.collection('activityLog').add({
+    timestamp:firebase.firestore.FieldValue.serverTimestamp(),
+    userId:u.uid,userEmail:u.email,userName:u.displayName||u.email,userPhoto:u.photoURL||null,
+    action:action,description:description,details:details||{}
+  }).catch(function(e){console.warn('Log error:',e);});
+}
+function saveEventHistory(action,snapshot){
+  var u=_auth.currentUser;if(!u)return;
+  _db.collection('eventHistory').add({
+    timestamp:firebase.firestore.FieldValue.serverTimestamp(),
+    userId:u.uid,userEmail:u.email,userName:u.displayName||u.email,
+    action:action,eventId:snapshot.id,eventName:snapshot.eventName||'',snapshot:snapshot
+  }).catch(function(e){console.warn('Event history error:',e);});
+}
+
 const FS = {
   todos:       (items) => _col('todos').set({items}).catch(console.error),
   events:      (items) => _col('events').set({items}).catch(console.error),
@@ -147,7 +165,7 @@ function currentFY(){const n=new Date();const yr=n.getFullYear();const mo=n.getM
 
 // Role system
 const ROLES={director:'Director',admin_support:'Admin Support',team_member:'Team Member'};
-const ROLE_TAB_ACCESS={director:null,admin_support:null,team_member:['overview','carryover','budget','revenue']};
+const ROLE_TAB_ACCESS={director:null,admin_support:['overview','carryover','budget','revenue','ledger','enrichment','audit'],team_member:['overview','carryover','budget','revenue']};
 
 
 // ── Account labels ────────────────────────────────────────────────────────────
@@ -311,11 +329,31 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole}){
   const done=todos.filter(t=>t.done);
   const priDot={high:'#EF4444',medium:'#F59E0B',low:'#94A3B8'};
   const today=new Date().toISOString().slice(0,10);
-  function toggle(id){setTodos(ts=>ts.map(t=>t.id===id?{...t,done:!t.done,completedAt:!t.done?today:undefined}:t));}
-  function del(id){setTodos(ts=>ts.filter(t=>t.id!==id));}
-  function add(){if(!form.title.trim())return;setTodos(ts=>[...ts,{id:'u'+Date.now(),...form,done:false,createdAt:today}]);setForm({title:'',body:'',cat:'general',priority:'medium',assignedTo:'',dueDate:''});setShowAdd(false);}
+  function toggle(id){
+    const t=todos.find(x=>x.id===id);if(!t)return;
+    const nowDone=!t.done;
+    setTodos(ts=>ts.map(x=>x.id===id?{...x,done:nowDone,completedAt:nowDone?today:undefined}:x));
+    logActivity(nowDone?'todo_completed':'todo_reopened',`${nowDone?'Completed':'Reopened'}: "${t.title}"`,{todoId:id});
+  }
+  function del(id){
+    const t=todos.find(x=>x.id===id);
+    setTodos(ts=>ts.filter(x=>x.id!==id));
+    if(t) logActivity('todo_deleted',`Deleted to-do: "${t.title}"`,{todoId:id,category:t.cat});
+  }
+  function add(){
+    if(!form.title.trim())return;
+    const newTodo={id:'u'+Date.now(),...form,done:false,createdAt:today};
+    setTodos(ts=>[...ts,newTodo]);
+    logActivity('todo_added',`Added to-do: "${form.title}"`,{category:form.cat,priority:form.priority,assignedTo:form.assignedTo,dueDate:form.dueDate});
+    setForm({title:'',body:'',cat:'general',priority:'medium',assignedTo:'',dueDate:''});setShowAdd(false);
+  }
   function startEdit(t){setEditId(t.id);setEditForm({title:t.title,body:t.body||'',cat:t.cat||'general',priority:t.priority||'medium',assignedTo:t.assignedTo||'',dueDate:t.dueDate||''});}
-  function saveEdit(){setTodos(ts=>ts.map(t=>t.id===editId?{...t,...editForm}:t));setEditId(null);}
+  function saveEdit(){
+    const t=todos.find(x=>x.id===editId);
+    setTodos(ts=>ts.map(x=>x.id===editId?{...x,...editForm}:x));
+    logActivity('todo_edited',`Edited to-do: "${editForm.title}"`,{todoId:editId,changes:editForm});
+    setEditId(null);
+  }
   function isOverdue(t){return t.dueDate&&t.dueDate<today&&!t.done;}
   const byFY={};txns.forEach(t=>{if(!byFY[t.fy])byFY[t.fy]={exp1:0,exp2:0,rev2:0};if(t.account==='0110029')byFY[t.fy].exp1+=t.amt;if(t.account==='0110238')byFY[t.fy].exp2+=t.amt;if(t.account==='0110237'&&t.sacs_group==='8xxx')byFY[t.fy].rev2+=t.amt;});
   const fy=byFY['FY25/26']||{};const totalExp1=Object.values(byFY).reduce((s,f)=>s+(f.exp1||0),0);
@@ -612,7 +650,7 @@ function BudgetTab({txns,amendments,setAmendments}){
 }
 
 // ── Revenue Tracker Tab ───────────────────────────────────────────────────────
-function RevenueTab({txns,events,setEvents}){
+function RevenueTab({txns,events,setEvents,userRole}){
   const [section,setSection]=useState('coe');
   const [showForm,setShowForm]=useState(false);
   const [editingId,setEditingId]=useState(null);
@@ -628,12 +666,33 @@ function RevenueTab({txns,events,setEvents}){
   const statusL={building:'Building',sent:'Invoice Sent',received:'Received',discrepancy:'Discrepancy'};
   const statusBg={building:'#F1F5F9',sent:'#DBEAFE',received:'#D1FAE5',discrepancy:'#FEE2E2'};
   const statusTc={building:'#64748B',sent:'#1D4ED8',received:'#065F46',discrepancy:'#991B1B'};
-  const psc={received:'#D1FAE5',ready:'#DBEAFE',pending:'#FEF3C7',future:'#F3F4F6'};
-  const pst={received:'#065F46',ready:'#1D4ED8',pending:'#92400E',future:'#374151'};
   const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'8px 12px',width:'100%'};
-  function addEvent(){const rows=pRows.filter(r=>r.partner&&r.amount);if(!form.eventName||rows.length===0)return;setEvents(e=>[...e,{id:Date.now(),eventName:form.eventName,subject:form.subject,coe:COE_MAP[form.subject],date:form.date,invoiceNo:form.invoiceNo,partners:rows,invoiceStatus:'building',txn237:''}]);setForm({eventName:'',subject:'Science',date:'',invoiceNo:''});setPRows([{id:Date.now(),partner:'',amount:'',txnId238:'',paid:false}]);setShowForm(false);}
-  function startEdit(ev){setEditingId(ev.id);setEditForm({eventName:ev.eventName,subject:ev.subject,date:ev.date,invoiceNo:ev.invoiceNo||'',invoiceStatus:ev.invoiceStatus||'building',txn237:ev.txn237||''});setEditPartners((ev.partners||[]).map(p=>({...p,txnId238:p.txnId238||p.txnId||''})));}
-  function saveEdit(evId){setEvents(es=>es.map(x=>x.id!==evId?x:{...x,...editForm,coe:COE_MAP[editForm.subject]||x.coe,partners:editPartners}));setEditingId(null);}
+  const canDelete=userRole==='director'||userRole==='admin_support';
+  function addEvent(){
+    const rows=pRows.filter(r=>r.partner&&r.amount);if(!form.eventName||rows.length===0)return;
+    const newEv={id:Date.now(),eventName:form.eventName,subject:form.subject,coe:COE_MAP[form.subject],date:form.date,invoiceNo:form.invoiceNo,partners:rows,invoiceStatus:'building',txn237:''};
+    setEvents(ev=>[...ev,newEv]);
+    logActivity('event_added',`Added COE event: "${form.eventName}"`,{subject:form.subject,coe:COE_MAP[form.subject],partnerCount:rows.length});
+    setForm({eventName:'',subject:'Science',date:'',invoiceNo:''});setPRows([{id:Date.now(),partner:'',amount:'',txnId238:'',paid:false}]);setShowForm(false);
+  }
+  function startEdit(ev){
+    setEditingId(ev.id);
+    setEditForm({eventName:ev.eventName,subject:ev.subject,date:ev.date,invoiceNo:ev.invoiceNo||'',invoiceStatus:ev.invoiceStatus||'building',txn237:ev.txn237||''});
+    setEditPartners((ev.partners||[]).map(p=>({...p,txnId238:p.txnId238||p.txnId||''})));
+  }
+  function saveEdit(evId){
+    const before=events.find(x=>x.id===evId);
+    if(before) saveEventHistory('updated',before);
+    setEvents(es=>es.map(x=>x.id!==evId?x:{...x,...editForm,coe:COE_MAP[editForm.subject]||x.coe,partners:editPartners}));
+    logActivity('event_edited',`Edited COE event: "${editForm.eventName}"`,{eventId:evId,status:editForm.invoiceStatus});
+    setEditingId(null);
+  }
+  function deleteEvent(evId){
+    const ev=events.find(x=>x.id===evId);
+    if(ev) saveEventHistory('deleted',ev);
+    setEvents(es=>es.filter(x=>x.id!==evId));
+    if(ev) logActivity('event_deleted',`Deleted COE event: "${ev.eventName}"`,{eventId:evId,subject:ev.subject});
+  }
   const tabBtn=(k,l)=><button onClick={()=>setSection(k)} style={{background:'none',border:'none',borderBottom:section===k?'2px solid #1D4ED8':'2px solid transparent',padding:'0 4px 10px',fontSize:'14px',fontWeight:'600',color:section===k?'#1D4ED8':'#64748B',cursor:'pointer',marginBottom:'-2px'}}>{l}</button>;
   return(
     <div>
@@ -665,10 +724,9 @@ function RevenueTab({txns,events,setEvents}){
             <KpiCard label="COE Expenses Paid" value={fmt(exp238.reduce((s,t)=>s+t.amt,0))} accent="#D97706"/>
             <KpiCard label="Tracked Events" value={events.length} sub={byInv.length+' invoice group(s)'} accent="#D97706"/>
           </div>
-          {/* Unpaid partner payments tracker */}
-          {(()=>{const unpaidPartners=events.flatMap(ev=>ev.partners.filter(p=>!p.paid));const unpaidCount=unpaidPartners.length;const unpaidAmt=unpaidPartners.reduce((s,p)=>s+(parseFloat(p.amount)||0),0);return unpaidCount>0?(<div style={{background:'#FEF3C7',border:'1px solid #FDE68A',borderRadius:'10px',padding:'12px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}}><div style={{display:'flex',alignItems:'center',gap:'10px'}}><span style={{fontSize:'18px'}}>⏳</span><div><div style={{fontWeight:'700',color:'#92400E',fontSize:'13px'}}>{unpaidCount} partner payment{unpaidCount!==1?'s':''} still outstanding</div><div style={{fontSize:'12px',color:'#78350F',marginTop:'2px'}}>Across {[...new Set(events.filter(ev=>ev.partners.some(p=>!p.paid)).map(ev=>ev.subject))].join(', ')}</div></div></div><div style={{textAlign:'right'}}><div style={{fontSize:'20px',fontWeight:'700',color:'#92400E'}}>{fmt(unpaidAmt)}</div><div style={{fontSize:'11px',color:'#78350F'}}>total pending</div></div></div>):null;})()} 
+          {(()=>{const up=events.flatMap(ev=>ev.partners.filter(p=>!p.paid));const uc=up.length;const ua=up.reduce((s,p)=>s+(parseFloat(p.amount)||0),0);return uc>0?(<div style={{background:'#FEF3C7',border:'1px solid #FDE68A',borderRadius:'10px',padding:'12px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}}><div style={{display:'flex',alignItems:'center',gap:'10px'}}><span style={{fontSize:'18px'}}>⏳</span><div><div style={{fontWeight:'700',color:'#92400E',fontSize:'13px'}}>{uc} partner payment{uc!==1?'s':''} outstanding</div><div style={{fontSize:'12px',color:'#78350F',marginTop:'2px'}}>Across {[...new Set(events.filter(ev=>ev.partners.some(p=>!p.paid)).map(ev=>ev.subject))].join(', ')}</div></div></div><div style={{textAlign:'right'}}><div style={{fontSize:'20px',fontWeight:'700',color:'#92400E'}}>{fmt(ua)}</div><div style={{fontSize:'11px',color:'#78350F'}}>total pending</div></div></div>):null;})()}
           <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-            <div><h3 style={{fontSize:'15px',fontWeight:'700',color:'#1E293B',margin:'0 0 4px'}}>COE Reimbursement Events</h3><p style={{fontSize:'13px',color:'#64748B',margin:0}}>Log partner payments, bundle into COE invoices, match to received revenue</p></div>
+            <div><h3 style={{fontSize:'15px',fontWeight:'700',color:'#1E293B',margin:'0 0 4px'}}>COE Reimbursement Events</h3><p style={{fontSize:'13px',color:'#64748B',margin:0}}>Log partner payments · Bundle into COE invoices · Match to received revenue</p></div>
             <button onClick={()=>{setShowForm(v=>!v);setEditingId(null);}} style={{background:'#D97706',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontWeight:'600',cursor:'pointer'}}>+ Add Event</button>
           </div>
           {showForm&&(
@@ -739,7 +797,7 @@ function RevenueTab({txns,events,setEvents}){
                         <div style={{display:'flex',alignItems:'center',gap:'8px',marginLeft:'12px',flexShrink:0}}>
                           <span style={{padding:'3px 10px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:statusBg[ev.invoiceStatus]||'#F1F5F9',color:statusTc[ev.invoiceStatus]||'#64748B'}}>{statusL[ev.invoiceStatus]||ev.invoiceStatus}</span>
                           <button onClick={()=>startEdit(ev)} style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'6px',padding:'4px 10px',cursor:'pointer',color:'#1D4ED8',fontSize:'12px',fontWeight:'600'}}>Edit</button>
-                          <button onClick={()=>setEvents(es=>es.filter(x=>x.id!==ev.id))} style={{background:'none',border:'none',color:'#94A3B8',cursor:'pointer',fontSize:'18px'}} onMouseOver={e=>e.target.style.color='#EF4444'} onMouseOut={e=>e.target.style.color='#94A3B8'}>x</button>
+                          {canDelete&&<button onClick={()=>deleteEvent(ev.id)} style={{background:'none',border:'none',color:'#94A3B8',cursor:'pointer',fontSize:'18px'}} onMouseOver={e=>e.target.style.color='#EF4444'} onMouseOut={e=>e.target.style.color='#94A3B8'}>x</button>}
                         </div>
                       </div>
                     </div>
@@ -754,13 +812,21 @@ function RevenueTab({txns,events,setEvents}){
   );
 }
 
-// ── Transaction Ledger Tab ────────────────────────────────────────────────────
+// ── Transaction Ledger Tab ───────────────────────────────────────────────────
 function LedgerTab({txns,enrichments,auditTags,onJumpToEnrich}){
-  const [filters,setFilters]=useState({search:'',account:'',fy:'',type:'',sacs:''});
+  const [filters,setFilters]=useState({search:'',account:'',fy:'',type:'',sacs:'',objCode:''});
   const [sortCol,setSortCol]=useState('date');
   const [sortDir,setSortDir]=useState('desc');
   const [page,setPage]=useState(0);
   const PAGE=50;
+
+  // Unique object codes from transactions (for individual code filter)
+  const objCodes=useMemo(()=>{
+    const src=filters.sacs?txns.filter(t=>t.sacs_group===filters.sacs):txns;
+    const m={};src.forEach(t=>{if(t.obj&&!m[t.obj])m[t.obj]=t.obj_desc||t.obj;});
+    return Object.entries(m).sort((a,b)=>a[0].localeCompare(b[0]));
+  },[txns,filters.sacs]);
+
   const filtered=useMemo(()=>{
     let r=txns;
     if(filters.search){const q=filters.search.toLowerCase();r=r.filter(t=>t.desc.toLowerCase().includes(q)||t.ref.toLowerCase().includes(q)||t.obj_desc.toLowerCase().includes(q));}
@@ -768,11 +834,17 @@ function LedgerTab({txns,enrichments,auditTags,onJumpToEnrich}){
     if(filters.fy) r=r.filter(t=>t.fy===filters.fy);
     if(filters.type) r=r.filter(t=>t.type===filters.type);
     if(filters.sacs) r=r.filter(t=>t.sacs_group===filters.sacs);
+    if(filters.objCode) r=r.filter(t=>t.obj===filters.objCode);
     return [...r].sort((a,b)=>{const v=sortCol==='amt'?a.amt-b.amt:(a[sortCol]||'').localeCompare(b[sortCol]||'');return sortDir==='asc'?v:-v;});
   },[txns,filters,sortCol,sortDir]);
+
   const pages=Math.ceil(filtered.length/PAGE);
   const shown=filtered.slice(page*PAGE,(page+1)*PAGE);
-  function setF(k,v){setFilters(f=>({...f,[k]:v}));setPage(0);}
+  function setF(k,v){
+    if(k==='sacs') setFilters(f=>({...f,sacs:v,objCode:''})); // reset obj code when SACS changes
+    else setFilters(f=>({...f,[k]:v}));
+    setPage(0);
+  }
   function toggleSort(col){if(sortCol===col)setSortDir(d=>d==='asc'?'desc':'asc');else{setSortCol(col);setSortDir('asc');}}
   const th={padding:'10px 12px',fontSize:'11px',fontWeight:'700',color:'#64748B',textTransform:'uppercase',letterSpacing:'0.05em',textAlign:'left',background:'#F8FAFC',borderBottom:'1px solid #E2E8F0',cursor:'pointer',userSelect:'none',whiteSpace:'nowrap'};
   const td={padding:'10px 12px',fontSize:'12px',color:'#334155',borderBottom:'1px solid #F8FAFC'};
@@ -784,7 +856,7 @@ function LedgerTab({txns,enrichments,auditTags,onJumpToEnrich}){
         <span style={{fontSize:'13px',color:'#64748B'}}>{filtered.length.toLocaleString()} of {txns.length.toLocaleString()} records</span>
       </div>
       <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr 1fr 1fr',gap:'8px'}}>
-        <input placeholder="🔍 Search description, ref, category…" value={filters.search} onChange={e=>setF('search',e.target.value)} style={inp}/>
+        <input placeholder="Search description, ref, category..." value={filters.search} onChange={e=>setF('search',e.target.value)} style={inp}/>
         <select value={filters.account} onChange={e=>setF('account',e.target.value)} style={inp}>
           <option value="">All Accounts</option>
           {['0110028','0110029','0110030','0110237','0110238'].map(a=><option key={a} value={a}>{ACCT_OPT(a)}</option>)}
@@ -793,14 +865,24 @@ function LedgerTab({txns,enrichments,auditTags,onJumpToEnrich}){
         <select value={filters.type} onChange={e=>setF('type',e.target.value)} style={inp}><option value="">All Types</option>{['JE','OH','AR','CR','TR'].map(t=><option key={t} value={t}>{t}</option>)}</select>
         <select value={filters.sacs} onChange={e=>setF('sacs',e.target.value)} style={inp}>{SACS_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
       </div>
+      {/* Object code filter — shows when SACS group selected OR always for fine control */}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 3fr',gap:'8px',alignItems:'center'}}>
+        <select value={filters.objCode} onChange={e=>setF('objCode',e.target.value)} style={inp}>
+          <option value="">{filters.sacs?`All codes in ${filters.sacs}`:'All Object Codes'}</option>
+          {objCodes.map(([code,desc])=><option key={code} value={code}>{code}{desc?' — '+desc:''}</option>)}
+        </select>
+        {(filters.search||filters.account||filters.fy||filters.type||filters.sacs||filters.objCode)&&
+          <button onClick={()=>{setFilters({search:'',account:'',fy:'',type:'',sacs:'',objCode:''});setPage(0);}} style={{background:'none',border:'1px solid #E2E8F0',borderRadius:'7px',padding:'7px 14px',cursor:'pointer',color:'#64748B',fontSize:'13px',width:'fit-content'}}>Clear all filters</button>
+        }
+      </div>
       <div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',overflow:'hidden'}}>
         <div style={{overflowX:'auto'}}>
           <table style={{width:'100%',borderCollapse:'collapse',minWidth:'1000px'}}>
             <thead>
               <tr>
-                {[['date','Date'],['account','Account'],['type','Type'],['desc','Description'],['obj_desc','Category'],['sacs_label','SACS Group'],['amt','Amount']].map(([col,lbl])=>(
+                {[['date','Date'],['account','Account'],['type','Type'],['desc','Description'],['obj','Obj Code'],['obj_desc','Category'],['sacs_label','SACS'],['amt','Amount']].map(([col,lbl])=>(
                   <th key={col} onClick={()=>toggleSort(col)} style={th}>
-                    <span style={{display:'flex',alignItems:'center',gap:'4px'}}>{lbl} <SortIcon col={col} sortCol={sortCol} sortDir={sortDir}/></span>
+                    <span style={{display:'flex',alignItems:'center',gap:'4px'}}>{lbl} <span style={{fontSize:'9px',color:sortCol===col?'#1D4ED8':'#CBD5E1'}}>{sortCol===col?(sortDir==='asc'?'↑':'↓'):'↕'}</span></span>
                   </th>
                 ))}
                 <th style={th}>Flags</th>
@@ -809,33 +891,19 @@ function LedgerTab({txns,enrichments,auditTags,onJumpToEnrich}){
             </thead>
             <tbody>
               {shown.map(t=>{
-                const enr=enrichments[t.id];
-                const tags=auditTags[t.id]||[];
+                const enr=enrichments[t.id];const tags=auditTags[t.id]||[];
                 return(
                   <tr key={t.id} style={{background:'white'}} onMouseOver={e=>e.currentTarget.style.background='#F8FAFC'} onMouseOut={e=>e.currentTarget.style.background='white'}>
                     <td style={{...td,whiteSpace:'nowrap'}}>{t.date}</td>
-                    <td style={td}>
-                      <div style={{display:'flex',flexDirection:'column',gap:'2px'}}>
-                        <AcctBadge account={t.account}/>
-                        <span style={{fontSize:'10px',color:'#94A3B8'}}>{ACCT_LABEL[t.account]}</span>
-                      </div>
-                    </td>
+                    <td style={td}><div style={{display:'flex',flexDirection:'column',gap:'2px'}}><AcctBadge account={t.account}/><span style={{fontSize:'10px',color:'#94A3B8'}}>{ACCT_LABEL[t.account]}</span></div></td>
                     <td style={{...td,color:'#94A3B8'}}>{t.type}</td>
-                    <td style={{...td,maxWidth:'220px'}}>
-                      <div style={{fontWeight:'500',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{enr?.desc||t.desc}</div>
-                      {enr?.desc&&<div style={{fontSize:'10px',color:'#94A3B8',fontStyle:'italic',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.desc}</div>}
-                    </td>
+                    <td style={{...td,maxWidth:'200px'}}><div style={{fontWeight:'500',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{enr?.desc||t.desc}</div>{enr?.desc&&<div style={{fontSize:'10px',color:'#94A3B8',fontStyle:'italic',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.desc}</div>}</td>
+                    <td style={{...td,fontFamily:'monospace',fontWeight:'600',color:'#475569'}}>{t.obj}</td>
                     <td style={td}>{t.obj_desc}</td>
                     <td style={{...td,color:'#64748B'}}>{t.sacs_label}</td>
                     <td style={{...td,textAlign:'right',fontWeight:'700',color:t.amt<0?'#DC2626':'#1E293B',whiteSpace:'nowrap'}}>{fmt(t.amt)}</td>
-                    <td style={td}>
-                      <div style={{display:'flex',flexWrap:'wrap',gap:'3px'}}>
-                        {tags.map(tag=>{const ti=AUDIT_TAGS.find(x=>x.id===tag);return ti?<span key={tag} style={{padding:'1px 6px',borderRadius:'20px',fontSize:'10px',fontWeight:'700',background:ti.bg,color:ti.color}}>{ti.label.split(' ')[0]}</span>:null;})}
-                      </div>
-                    </td>
-                    <td style={td}>
-                      <button onClick={()=>onJumpToEnrich(t.id)} title="Open in Enrichment & Audit" style={{background:'none',border:'none',cursor:'pointer',fontSize:'14px',color:'#CBD5E1',padding:'2px'}} onMouseOver={e=>e.target.style.color='#1D4ED8'} onMouseOut={e=>e.target.style.color='#CBD5E1'}>✏️</button>
-                    </td>
+                    <td style={td}><div style={{display:'flex',flexWrap:'wrap',gap:'3px'}}>{tags.map(tag=>{const ti=AUDIT_TAGS.find(x=>x.id===tag);return ti?<span key={tag} style={{padding:'1px 6px',borderRadius:'20px',fontSize:'10px',fontWeight:'700',background:ti.bg,color:ti.color}}>{ti.label.split(' ')[0]}</span>:null;})}</div></td>
+                    <td style={td}><button onClick={()=>onJumpToEnrich(t.id)} title="Open in Enrichment & Audit" style={{background:'none',border:'none',cursor:'pointer',fontSize:'14px',color:'#CBD5E1',padding:'2px'}} onMouseOver={e=>e.target.style.color='#1D4ED8'} onMouseOut={e=>e.target.style.color='#CBD5E1'}>✏️</button></td>
                   </tr>
                 );
               })}
@@ -847,8 +915,8 @@ function LedgerTab({txns,enrichments,auditTags,onJumpToEnrich}){
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
           <span style={{fontSize:'13px',color:'#64748B'}}>Page {page+1} of {pages}</span>
           <div style={{display:'flex',gap:'8px'}}>
-            <button disabled={page===0} onClick={()=>setPage(p=>p-1)} style={{padding:'7px 16px',borderRadius:'8px',border:'1px solid #E2E8F0',background:'white',cursor:page===0?'not-allowed':'pointer',color:page===0?'#CBD5E1':'#334155',fontWeight:'600',fontSize:'13px'}}>← Prev</button>
-            <button disabled={page>=pages-1} onClick={()=>setPage(p=>p+1)} style={{padding:'7px 16px',borderRadius:'8px',border:'1px solid #E2E8F0',background:'white',cursor:page>=pages-1?'not-allowed':'pointer',color:page>=pages-1?'#CBD5E1':'#334155',fontWeight:'600',fontSize:'13px'}}>Next →</button>
+            <button disabled={page===0} onClick={()=>setPage(p=>p-1)} style={{padding:'7px 16px',borderRadius:'8px',border:'1px solid #E2E8F0',background:'white',cursor:page===0?'not-allowed':'pointer',color:page===0?'#CBD5E1':'#334155',fontWeight:'600',fontSize:'13px'}}>Prev</button>
+            <button disabled={page>=pages-1} onClick={()=>setPage(p=>p+1)} style={{padding:'7px 16px',borderRadius:'8px',border:'1px solid #E2E8F0',background:'white',cursor:page>=pages-1?'not-allowed':'pointer',color:page>=pages-1?'#CBD5E1':'#334155',fontWeight:'600',fontSize:'13px'}}>Next</button>
           </div>
         </div>
       )}
@@ -856,34 +924,58 @@ function LedgerTab({txns,enrichments,auditTags,onJumpToEnrich}){
   );
 }
 
-// ── Enrichment & Audit Tab ────────────────────────────────────────────────────
+// ── Enrichment & Audit Tab ───────────────────────────────────────────────────
 function EnrichmentTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,jumpToId,clearJump}){
-  const [filters,setFilters]=useState({search:'',account:'',fy:'',sacs:'',tagged:'all'});
+  const [filters,setFilters]=useState({search:'',account:'',fy:'',sacs:'',objCode:'',tagged:'all'});
   const [page,setPage]=useState(0);
   const rowRefs=useRef({});
   const PAGE=25;
-  function setF(k,v){setFilters(f=>({...f,[k]:v}));setPage(0);}
+  function setF(k,v){
+    if(k==='sacs') setFilters(f=>({...f,sacs:v,objCode:''}));
+    else setFilters(f=>({...f,[k]:v}));
+    setPage(0);
+  }
+
+  const objCodes=useMemo(()=>{
+    const src=filters.sacs?txns.filter(t=>t.sacs_group===filters.sacs):txns;
+    const m={};src.forEach(t=>{if(t.obj&&!m[t.obj])m[t.obj]=t.obj_desc||t.obj;});
+    return Object.entries(m).sort((a,b)=>a[0].localeCompare(b[0]));
+  },[txns,filters.sacs]);
+
   const filtered=useMemo(()=>{
     let r=txns;
     if(filters.search){const q=filters.search.toLowerCase();r=r.filter(t=>t.desc.toLowerCase().includes(q)||(enrichments[t.id]?.desc||'').toLowerCase().includes(q)||t.obj_desc.toLowerCase().includes(q));}
     if(filters.account) r=r.filter(t=>t.account===filters.account);
     if(filters.fy) r=r.filter(t=>t.fy===filters.fy);
     if(filters.sacs) r=r.filter(t=>t.sacs_group===filters.sacs);
+    if(filters.objCode) r=r.filter(t=>t.obj===filters.objCode);
     if(filters.tagged==='tagged') r=r.filter(t=>(auditTags[t.id]||[]).length>0||enrichments[t.id]?.desc);
     if(filters.tagged==='untagged') r=r.filter(t=>!(auditTags[t.id]||[]).length&&!enrichments[t.id]?.desc);
     return r;
   },[txns,filters,enrichments,auditTags]);
+
   const pages=Math.ceil(filtered.length/PAGE);
   const shown=filtered.slice(page*PAGE,(page+1)*PAGE);
+
   useEffect(()=>{
     if(!jumpToId) return;
     const idx=filtered.findIndex(t=>t.id===jumpToId);
-    if(idx===-1){setFilters({search:'',account:'',fy:'',sacs:'',tagged:'all'});setPage(0);setTimeout(()=>clearJump(),200);return;}
+    if(idx===-1){clearJump();return;}
     const tp=Math.floor(idx/PAGE);setPage(tp);
     setTimeout(()=>{const el=rowRefs.current[jumpToId];if(el){el.scrollIntoView({behavior:'smooth',block:'center'});el.style.outline='3px solid #3B82F6';el.style.borderRadius='12px';setTimeout(()=>{if(el){el.style.outline='';el.style.borderRadius='';}},2500);}clearJump();},150);
   },[jumpToId]);
+
   function updateEnr(id,field,val){setEnrichments(e=>({...e,[id]:{...(e[id]||{}),[field]:val}}));}
-  function toggleTag(id,tagId){setAuditTags(t=>{const cur=t[id]||[];return{...t,[id]:cur.includes(tagId)?cur.filter(x=>x!==tagId):[...cur,tagId]};});}
+  function toggleTag(id,tagId){
+    setAuditTags(t=>{
+      const cur=t[id]||[];
+      const next=cur.includes(tagId)?cur.filter(x=>x!==tagId):[...cur,tagId];
+      const tag=AUDIT_TAGS.find(x=>x.id===tagId);
+      const action=cur.includes(tagId)?'removed':'added';
+      logActivity('tag_changed',`${action==='added'?'Tagged':'Untagged'} transaction as "${tag?tag.label:tagId}"`,{txnId:id,tag:tagId,action});
+      return{...t,[id]:next};
+    });
+  }
   const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'8px 12px',width:'100%',fontSize:'13px'};
   return(
     <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
@@ -892,7 +984,7 @@ function EnrichmentTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,j
         <span style={{fontSize:'13px',color:'#64748B'}}>{filtered.length.toLocaleString()} records shown</span>
       </div>
       <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr 1fr',gap:'8px'}}>
-        <input placeholder="🔍 Search…" value={filters.search} onChange={e=>setF('search',e.target.value)} style={inp}/>
+        <input placeholder="Search..." value={filters.search} onChange={e=>setF('search',e.target.value)} style={inp}/>
         <select value={filters.account} onChange={e=>setF('account',e.target.value)} style={inp}>
           <option value="">All Accounts</option>
           {['0110028','0110029','0110030','0110237','0110238'].map(a=><option key={a} value={a}>{ACCT_OPT(a)}</option>)}
@@ -900,23 +992,28 @@ function EnrichmentTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,j
         <select value={filters.fy} onChange={e=>setF('fy',e.target.value)} style={inp}><option value="">All Years</option>{FY_LIST.slice(0,3).map(f=><option key={f} value={f}>{f}</option>)}</select>
         <select value={filters.sacs} onChange={e=>setF('sacs',e.target.value)} style={inp}>{SACS_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
       </div>
-      <div style={{display:'flex',gap:'8px'}}>
-        {[['all','All'],['tagged','Enriched / Tagged'],['untagged','Not Yet Enriched']].map(([v,l])=>(
-          <button key={v} onClick={()=>setF('tagged',v)} style={{padding:'6px 14px',borderRadius:'20px',fontSize:'12px',fontWeight:'600',border:'1px solid',cursor:'pointer',background:filters.tagged===v?'#1E293B':'white',color:filters.tagged===v?'white':'#64748B',borderColor:filters.tagged===v?'#1E293B':'#E2E8F0'}}>{l}</button>
-        ))}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'8px',alignItems:'center'}}>
+        <select value={filters.objCode} onChange={e=>setF('objCode',e.target.value)} style={inp}>
+          <option value="">{filters.sacs?`All codes in ${filters.sacs}`:'All Object Codes'}</option>
+          {objCodes.map(([code,desc])=><option key={code} value={code}>{code}{desc?' — '+desc:''}</option>)}
+        </select>
+        <div style={{display:'flex',gap:'8px'}}>
+          {[['all','All'],['tagged','Enriched / Tagged'],['untagged','Not Yet Enriched']].map(([v,l])=>(
+            <button key={v} onClick={()=>setF('tagged',v)} style={{padding:'6px 12px',borderRadius:'20px',fontSize:'12px',fontWeight:'600',border:'1px solid',cursor:'pointer',background:filters.tagged===v?'#1E293B':'white',color:filters.tagged===v?'white':'#64748B',borderColor:filters.tagged===v?'#1E293B':'#E2E8F0',whiteSpace:'nowrap'}}>{l}</button>
+          ))}
+        </div>
       </div>
       <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
         {shown.map(t=>{
-          const enr=enrichments[t.id]||{};
-          const tags=auditTags[t.id]||[];
-          const hasData=tags.length>0||enr.desc;
+          const enr=enrichments[t.id]||{};const tags=auditTags[t.id]||[];const hasData=tags.length>0||enr.desc;
           return(
             <div key={t.id} ref={el=>rowRefs.current[t.id]=el} style={{background:hasData?'#FAFCFF':'white',borderRadius:'12px',border:hasData?'1px solid #BFDBFE':'1px solid #E2E8F0',padding:'14px'}}>
-              <div style={{display:'grid',gridTemplateColumns:'100px 1fr 1.8fr 1.4fr 80px',gap:'14px',alignItems:'start'}}>
+              <div style={{display:'grid',gridTemplateColumns:'110px 1fr 1.8fr 1.4fr 80px',gap:'14px',alignItems:'start'}}>
                 <div>
                   <div style={{fontSize:'11px',color:'#94A3B8',marginBottom:'6px'}}>{t.date.slice(5)}</div>
                   <AcctBadge account={t.account}/>
                   <div style={{fontSize:'10px',color:'#94A3B8',marginTop:'4px'}}>{t.type}</div>
+                  <div style={{fontSize:'10px',fontFamily:'monospace',fontWeight:'600',color:'#475569',marginTop:'3px',background:'#F8FAFC',padding:'1px 5px',borderRadius:'3px',display:'inline-block'}}>{t.obj}</div>
                 </div>
                 <div>
                   <div style={{fontSize:'10px',color:'#94A3B8',fontWeight:'600',marginBottom:'4px'}}>Original (read-only)</div>
@@ -925,8 +1022,8 @@ function EnrichmentTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,j
                 </div>
                 <div>
                   <div style={{fontSize:'10px',color:'#94A3B8',fontWeight:'600',marginBottom:'4px'}}>Full description (editable)</div>
-                  <input value={enr.desc||''} onChange={e=>updateEnr(t.id,'desc',e.target.value)} placeholder="Expand the truncated description here…" style={{...inp,marginBottom:'6px'}}/>
-                  <textarea value={enr.notes||''} onChange={e=>updateEnr(t.id,'notes',e.target.value)} placeholder="Notes…" rows={1} style={{...inp,resize:'none'}}/>
+                  <input value={enr.desc||''} onChange={e=>updateEnr(t.id,'desc',e.target.value)} placeholder="Expand the truncated description here..." style={{...inp,marginBottom:'6px'}}/>
+                  <textarea value={enr.notes||''} onChange={e=>updateEnr(t.id,'notes',e.target.value)} placeholder="Notes..." rows={1} style={{...inp,resize:'none'}}/>
                 </div>
                 <div>
                   <div style={{fontSize:'10px',color:'#94A3B8',fontWeight:'600',marginBottom:'6px'}}>Audit Tags</div>
@@ -950,8 +1047,8 @@ function EnrichmentTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,j
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
           <span style={{fontSize:'13px',color:'#64748B'}}>Page {page+1} of {pages} · {filtered.length} records</span>
           <div style={{display:'flex',gap:'8px'}}>
-            <button disabled={page===0} onClick={()=>setPage(p=>p-1)} style={{padding:'7px 16px',borderRadius:'8px',border:'1px solid #E2E8F0',background:'white',cursor:page===0?'not-allowed':'pointer',color:page===0?'#CBD5E1':'#334155',fontWeight:'600',fontSize:'13px'}}>← Prev</button>
-            <button disabled={page>=pages-1} onClick={()=>setPage(p=>p+1)} style={{padding:'7px 16px',borderRadius:'8px',border:'1px solid #E2E8F0',background:'white',cursor:page>=pages-1?'not-allowed':'pointer',color:page>=pages-1?'#CBD5E1':'#334155',fontWeight:'600',fontSize:'13px'}}>Next →</button>
+            <button disabled={page===0} onClick={()=>setPage(p=>p-1)} style={{padding:'7px 16px',borderRadius:'8px',border:'1px solid #E2E8F0',background:'white',cursor:page===0?'not-allowed':'pointer',color:page===0?'#CBD5E1':'#334155',fontWeight:'600',fontSize:'13px'}}>Prev</button>
+            <button disabled={page>=pages-1} onClick={()=>setPage(p=>p+1)} style={{padding:'7px 16px',borderRadius:'8px',border:'1px solid #E2E8F0',background:'white',cursor:page>=pages-1?'not-allowed':'pointer',color:page>=pages-1?'#CBD5E1':'#334155',fontWeight:'600',fontSize:'13px'}}>Next</button>
           </div>
         </div>
       )}
@@ -1235,6 +1332,124 @@ function TeamPanel({currentUid,currentRole,onClose}){
 }
 
 
+// ── Activity Log Tab (Director only) ─────────────────────────────────────────
+function LogTab({logs}){
+  const [filterAction,setFilterAction]=useState('');
+  const [filterUser,setFilterUser]=useState('');
+  const [page,setPage]=useState(0);
+  const PAGE=50;
+
+  const ACTION_INFO={
+    'todo_added':{label:'To-Do Added',color:'#059669',bg:'#D1FAE5'},
+    'todo_edited':{label:'To-Do Edited',color:'#1D4ED8',bg:'#DBEAFE'},
+    'todo_completed':{label:'To-Do Completed',color:'#059669',bg:'#D1FAE5'},
+    'todo_reopened':{label:'To-Do Reopened',color:'#D97706',bg:'#FEF3C7'},
+    'todo_deleted':{label:'To-Do Deleted',color:'#DC2626',bg:'#FEE2E2'},
+    'event_added':{label:'Event Added',color:'#D97706',bg:'#FEF3C7'},
+    'event_edited':{label:'Event Edited',color:'#1D4ED8',bg:'#DBEAFE'},
+    'event_deleted':{label:'Event Deleted',color:'#DC2626',bg:'#FEE2E2'},
+    'tag_changed':{label:'Tag Updated',color:'#7C3AED',bg:'#EDE9FE'},
+    'data_imported':{label:'Data Imported',color:'#374151',bg:'#F3F4F6'},
+  };
+
+  const actionTypes=useMemo(()=>[...new Set(logs.map(l=>l.action))].sort(),[logs]);
+  const users=useMemo(()=>[...new Set(logs.map(l=>l.userEmail).filter(Boolean))].sort(),[logs]);
+
+  const filtered=useMemo(()=>{
+    let r=logs;
+    if(filterAction) r=r.filter(l=>l.action===filterAction);
+    if(filterUser) r=r.filter(l=>l.userEmail===filterUser);
+    return r;
+  },[logs,filterAction,filterUser]);
+
+  const pages=Math.ceil(filtered.length/PAGE);
+  const shown=filtered.slice(page*PAGE,(page+1)*PAGE);
+
+  function formatTs(ts){
+    if(!ts) return '—';
+    try{const d=ts.toDate?ts.toDate():new Date(ts);return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' '+d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});}
+    catch(err){return '—';}
+  }
+
+  const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'7px 10px',fontSize:'13px'};
+
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:'10px'}}>
+        <div>
+          <h2 style={{fontSize:'16px',fontWeight:'700',color:'#0F172A',margin:0}}>Activity Log</h2>
+          <p style={{fontSize:'13px',color:'#64748B',margin:'4px 0 0'}}>{filtered.length.toLocaleString()} entries · Director view only</p>
+        </div>
+        <div style={{display:'flex',gap:'8px'}}>
+          <select value={filterAction} onChange={e=>{setFilterAction(e.target.value);setPage(0);}} style={inp}>
+            <option value="">All Action Types</option>
+            {actionTypes.map(a=><option key={a} value={a}>{ACTION_INFO[a]?ACTION_INFO[a].label:a}</option>)}
+          </select>
+          <select value={filterUser} onChange={e=>{setFilterUser(e.target.value);setPage(0);}} style={inp}>
+            <option value="">All Users</option>
+            {users.map(u=><option key={u} value={u}>{u}</option>)}
+          </select>
+          {(filterAction||filterUser)&&<button onClick={()=>{setFilterAction('');setFilterUser('');setPage(0);}} style={{...inp,cursor:'pointer',color:'#64748B',background:'white'}}>Clear</button>}
+        </div>
+      </div>
+
+      {logs.length===0&&(
+        <div style={{background:'white',border:'2px dashed #E2E8F0',borderRadius:'12px',padding:'40px',textAlign:'center'}}>
+          <div style={{fontSize:'28px',marginBottom:'8px'}}>📋</div>
+          <p style={{color:'#64748B',fontWeight:'500',margin:0}}>No activity logged yet.</p>
+          <p style={{color:'#94A3B8',fontSize:'13px',margin:'6px 0 0'}}>Actions like adding to-dos, editing events, and tagging transactions will appear here.</p>
+        </div>
+      )}
+
+      {filtered.length===0&&logs.length>0&&(
+        <div style={{background:'white',border:'1px solid #E2E8F0',borderRadius:'12px',padding:'24px',textAlign:'center',color:'#94A3B8'}}>No entries match your filters.</div>
+      )}
+
+      {shown.length>0&&(
+        <div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',overflow:'hidden'}}>
+          {shown.map((entry,i)=>{
+            const ai=ACTION_INFO[entry.action]||{label:entry.action,color:'#64748B',bg:'#F3F4F6'};
+            return(
+              <div key={entry.id||i} style={{display:'flex',gap:'14px',padding:'14px 18px',borderBottom:i<shown.length-1?'1px solid #F8FAFC':'none',alignItems:'flex-start'}}>
+                {entry.userPhoto?
+                  <img src={entry.userPhoto} alt="" style={{width:'32px',height:'32px',borderRadius:'50%',flexShrink:0,marginTop:'2px'}}/>:
+                  <div style={{width:'32px',height:'32px',borderRadius:'50%',background:'#E2E8F0',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',flexShrink:0,marginTop:'2px'}}>👤</div>
+                }
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap',marginBottom:'4px'}}>
+                    <span style={{fontWeight:'600',color:'#1E293B',fontSize:'13px'}}>{entry.userName||entry.userEmail||'Unknown'}</span>
+                    <span style={{padding:'2px 8px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:ai.bg,color:ai.color}}>{ai.label}</span>
+                  </div>
+                  <div style={{fontSize:'13px',color:'#475569'}}>{entry.description}</div>
+                  {entry.details&&Object.keys(entry.details).length>0&&(
+                    <div style={{marginTop:'5px',display:'flex',gap:'10px',flexWrap:'wrap'}}>
+                      {Object.entries(entry.details).filter(([k])=>!['todoId','eventId'].includes(k)).map(([k,v])=>v&&String(v).length<40?(
+                        <span key={k} style={{fontSize:'11px',color:'#94A3B8'}}><span style={{fontWeight:'600'}}>{k}:</span> {String(v)}</span>
+                      ):null)}
+                    </div>
+                  )}
+                </div>
+                <div style={{fontSize:'11px',color:'#94A3B8',whiteSpace:'nowrap',marginTop:'3px',flexShrink:0}}>{formatTs(entry.timestamp)}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {pages>1&&(
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <span style={{fontSize:'13px',color:'#64748B'}}>Page {page+1} of {pages}</span>
+          <div style={{display:'flex',gap:'8px'}}>
+            <button disabled={page===0} onClick={()=>setPage(p=>p-1)} style={{padding:'7px 16px',borderRadius:'8px',border:'1px solid #E2E8F0',background:'white',cursor:page===0?'not-allowed':'pointer',color:page===0?'#CBD5E1':'#334155',fontWeight:'600',fontSize:'13px'}}>Prev</button>
+            <button disabled={page>=pages-1} onClick={()=>setPage(p=>p+1)} style={{padding:'7px 16px',borderRadius:'8px',border:'1px solid #E2E8F0',background:'white',cursor:page>=pages-1?'not-allowed':'pointer',color:page>=pages-1?'#CBD5E1':'#334155',fontWeight:'600',fontSize:'13px'}}>Next</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 const TABS=[
   {id:'overview',   label:'Overview',           icon:'📊'},
   {id:'carryover',  label:'Carryover',           icon:'📈'},
@@ -1243,19 +1458,19 @@ const TABS=[
   {id:'ledger',     label:'Transaction Ledger',  icon:'📄'},
   {id:'enrichment', label:'Enrichment & Audit',  icon:'✏️'},
   {id:'audit',      label:'Audit Summary',       icon:'🏷️'},
+  {id:'log',        label:'Activity Log',        icon:'📋'},
 ];
 
 
 function App(){
-  // Auth & role
   const [user,setUser]=useState(null);
   const [authLoading,setAuthLoading]=useState(true);
   const [userRole,setUserRole]=useState('team_member');
   const [roleLoading,setRoleLoading]=useState(true);
   const [dataLoading,setDataLoading]=useState(true);
   const [showTeamPanel,setShowTeamPanel]=useState(false);
+  const [activityLogs,setActivityLogs]=useState([]);
 
-  // Data
   const [transactions,setTransactions]=useState([]);
   const [txnLoading,setTxnLoading]=useState(true);
   const [enrichments,setEnrichments]=useState({});
@@ -1268,33 +1483,27 @@ function App(){
   const [showUpload,setShowUpload]=useState(false);
   const enrTimer=useRef(null);
 
-  // Auth listener
   useEffect(()=>_auth.onAuthStateChanged(u=>{setUser(u);setAuthLoading(false);}),[]);
 
-  // Role loader — create or read user doc in /users/{uid}
   useEffect(()=>{
     if(!user){setRoleLoading(false);return;}
     const uRef=_db.collection('users').doc(user.uid);
     return uRef.onSnapshot(async snap=>{
       if(!snap.exists){
-        // First login: check if ANY users exist; first ever gets Director
-        const all=await _db.collection('users').limit(2).get();
+        const all=await _db.collection('users').limit(2).get().catch(()=>({empty:false}));
         const role=all.empty?'director':'team_member';
         await uRef.set({email:user.email,displayName:user.displayName||user.email,photoURL:user.photoURL||null,role,createdAt:firebase.firestore.FieldValue.serverTimestamp()}).catch(console.error);
         setUserRole(role);
-      } else {
-        setUserRole(snap.data().role||'team_member');
-      }
+      }else{setUserRole(snap.data().role||'team_member');}
       setRoleLoading(false);
     });
   },[user]);
 
-  // Firestore data listeners
   useEffect(()=>{
     if(!user||roleLoading)return;
-    let n=0;const done=()=>{if(++n>=5)setDataLoading(false);};
+    let n=0;const done=()=>{if(++n>=6)setDataLoading(false);};
     const subs=[
-      _db.collection('transactions').onSnapshot(s=>{setTransactions(s.docs.map(d=>d.data()));setTxnLoading(false);done();},e=>{console.error('Txn load:',e);setTxnLoading(false);done();}),
+      _db.collection('transactions').onSnapshot(s=>{setTransactions(s.docs.map(d=>d.data()));setTxnLoading(false);done();},e=>{console.error('Txn:',e);setTxnLoading(false);done();}),
       _col('todos').onSnapshot(s=>{if(!s.exists){FS.todos(INITIAL_TODOS);setTodos(INITIAL_TODOS);}else setTodos(s.data().items||[]);done();}),
       _col('events').onSnapshot(s=>{setEvents(s.exists?s.data().items||[]:[]);done();}),
       _col('amendments').onSnapshot(s=>{setAmendments(s.exists?s.data().items||[]:[]);done();}),
@@ -1304,7 +1513,13 @@ function App(){
     return()=>subs.forEach(u=>u());
   },[user,roleLoading]);
 
-  // Firestore-aware state updaters
+  // Activity log — directors only
+  useEffect(()=>{
+    if(userRole!=='director')return;
+    return _db.collection('activityLog').orderBy('timestamp','desc').limit(500)
+      .onSnapshot(s=>setActivityLogs(s.docs.map(d=>({id:d.id,...d.data()}))));
+  },[userRole]);
+
   function updTodos(fn){setTodos(p=>{const n=typeof fn==='function'?fn(p):fn;setTimeout(()=>FS.todos(n),0);return n;});}
   function updEvents(fn){setEvents(p=>{const n=typeof fn==='function'?fn(p):fn;setTimeout(()=>FS.events(n),0);return n;});}
   function updAmendments(fn){setAmendments(p=>{const n=typeof fn==='function'?fn(p):fn;setTimeout(()=>FS.amendments(n),0);return n;});}
@@ -1316,23 +1531,23 @@ function App(){
     const exist=mode==='incremental'?new Set(transactions.map(t=>t.id)):new Set();
     const toW=mode==='incremental'?rows.filter(r=>!exist.has(r.id)):rows;
     for(let i=0;i<toW.length;i+=BSIZE){const b=_db.batch();toW.slice(i,i+BSIZE).forEach(r=>b.set(_db.collection('transactions').doc(r.id),r));await b.commit();}
+    logActivity('data_imported',`Imported ${toW.length} transactions (${mode} mode)`,{count:toW.length,mode});
   }
 
-  // Tab visibility based on role
   const allowedTabIds=ROLE_TAB_ACCESS[userRole];
   const visibleTabs=allowedTabIds?TABS.filter(t=>allowedTabIds.includes(t.id)):TABS;
-
-  // Ensure active tab is always visible
   useEffect(()=>{if(visibleTabs.length&&!visibleTabs.find(t=>t.id===activeTab))setActiveTab(visibleTabs[0].id);},[userRole]);
 
-  const taggedCount=Object.values(auditTags).filter(v=>v&&v.length>0).length;
-  const activeTabInfo=visibleTabs.find(t=>t.id===activeTab)||visibleTabs[0]||TABS[0];
-  const canManage=userRole==='director'||userRole==='admin_support';
+  // Untagged count (transactions with NO tags at all)
+  const untaggedCount=useMemo(()=>transactions.filter(t=>!(auditTags[t.id]&&auditTags[t.id].length>0)).length,[transactions,auditTags]);
+  const untaggedLabel=untaggedCount>=1000?(untaggedCount/1000).toFixed(1)+'k':String(untaggedCount);
 
-  // Loading screens
-  if(authLoading) return(<div style={{minHeight:'100vh',background:'#1B2B4B',display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{color:'#93C5FD',fontSize:'14px'}}>⏳ Loading...</div></div>);
-  if(!user) return <LoginPage/>;
-  if(roleLoading||dataLoading||txnLoading) return(
+  const canManage=userRole==='director'||userRole==='admin_support';
+  const activeTabInfo=visibleTabs.find(t=>t.id===activeTab)||visibleTabs[0]||TABS[0];
+
+  if(authLoading)return(<div style={{minHeight:'100vh',background:'#1B2B4B',display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{color:'#93C5FD',fontSize:'14px'}}>Loading...</div></div>);
+  if(!user)return <LoginPage/>;
+  if(roleLoading||dataLoading||txnLoading)return(
     <div style={{minHeight:'100vh',background:'#1B2B4B',display:'flex',alignItems:'center',justifyContent:'center'}}>
       <div style={{textAlign:'center'}}>
         <div style={{fontSize:'36px',marginBottom:'12px'}}>📊</div>
@@ -1347,7 +1562,6 @@ function App(){
       {showUpload&&<UploadModal onClose={()=>setShowUpload(false)} onImport={handleImport} existingCount={transactions.length}/>}
       {showTeamPanel&&<TeamPanel currentUid={user.uid} currentRole={userRole} onClose={()=>setShowTeamPanel(false)}/>}
 
-      {/* Sidebar */}
       <div style={{width:'220px',flexShrink:0,display:'flex',flexDirection:'column',background:'#1B2B4B'}}>
         <div style={{padding:'20px 18px 16px',borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
           <div style={{fontSize:'10px',fontWeight:'700',letterSpacing:'0.12em',color:'#93C5FD',textTransform:'uppercase',marginBottom:'3px'}}>CAL-MSCS</div>
@@ -1361,7 +1575,9 @@ function App(){
               onMouseOver={e=>{if(activeTab!==tab.id)e.currentTarget.style.background='rgba(255,255,255,0.08)';}}
               onMouseOut={e=>{if(activeTab!==tab.id)e.currentTarget.style.background='transparent';}}>
               <span style={{fontSize:'14px'}}>{tab.icon}</span>{tab.label}
-              {tab.id==='audit'&&taggedCount>0&&<span style={{marginLeft:'auto',background:'#3B82F6',color:'white',fontSize:'10px',fontWeight:'700',padding:'2px 6px',borderRadius:'20px'}}>{taggedCount}</span>}
+              {tab.id==='audit'&&untaggedCount>0&&(
+                <span style={{marginLeft:'auto',background:'#F59E0B',color:'white',fontSize:'10px',fontWeight:'700',padding:'2px 6px',borderRadius:'20px'}} title={untaggedCount+' untagged transactions'}>{untaggedLabel}</span>
+              )}
             </button>
           ))}
         </nav>
@@ -1369,15 +1585,11 @@ function App(){
           {canManage&&<button onClick={()=>setShowUpload(true)}
             style={{display:'flex',alignItems:'center',gap:'8px',background:'rgba(255,255,255,0.1)',border:'none',cursor:'pointer',color:'#93C5FD',padding:'9px 12px',borderRadius:'8px',fontSize:'12px',fontWeight:'600'}}
             onMouseOver={e=>e.currentTarget.style.background='rgba(255,255,255,0.18)'}
-            onMouseOut={e=>e.currentTarget.style.background='rgba(255,255,255,0.1)'}>
-            📥 Import Data
-          </button>}
+            onMouseOut={e=>e.currentTarget.style.background='rgba(255,255,255,0.1)'}>Import Data</button>}
           {canManage&&<button onClick={()=>setShowTeamPanel(true)}
             style={{display:'flex',alignItems:'center',gap:'8px',background:'rgba(255,255,255,0.06)',border:'none',cursor:'pointer',color:'#93C5FD',padding:'9px 12px',borderRadius:'8px',fontSize:'12px'}}
             onMouseOver={e=>e.currentTarget.style.background='rgba(255,255,255,0.14)'}
-            onMouseOut={e=>e.currentTarget.style.background='rgba(255,255,255,0.06)'}>
-            👥 Manage Team
-          </button>}
+            onMouseOut={e=>e.currentTarget.style.background='rgba(255,255,255,0.06)'}>Manage Team</button>}
           <div style={{display:'flex',alignItems:'center',gap:'8px',padding:'4px 2px'}}>
             {user.photoURL&&<img src={user.photoURL} alt="" style={{width:'26px',height:'26px',borderRadius:'50%',flexShrink:0}}/>}
             <div style={{flex:1,minWidth:0}}>
@@ -1395,29 +1607,27 @@ function App(){
         </div>
       </div>
 
-      {/* Main content */}
       <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
         <div style={{background:'white',borderBottom:'1px solid #E2E8F0',padding:'14px 24px',display:'flex',alignItems:'center',gap:'10px'}}>
           <span style={{fontSize:'18px'}}>{activeTabInfo.icon}</span>
           <h1 style={{fontSize:'15px',fontWeight:'700',color:'#1E293B',margin:0}}>{activeTabInfo.label}</h1>
           <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:'10px'}}>
-            <span style={{fontSize:'11px',color:'#94A3B8'}}>FY2023–24 through FY2025–26 · Fund 94 · SACS</span>
+            <span style={{fontSize:'11px',color:'#94A3B8'}}>FY2023-24 through FY2025-26 · Fund 94 · SACS</span>
             {canManage&&<button onClick={()=>setShowUpload(true)}
               style={{fontSize:'12px',border:'1px solid #E2E8F0',color:'#64748B',padding:'5px 10px',borderRadius:'7px',background:'white',cursor:'pointer',fontWeight:'600'}}
               onMouseOver={e=>e.currentTarget.style.background='#F8FAFC'}
-              onMouseOut={e=>e.currentTarget.style.background='white'}>
-              📥 Import
-            </button>}
+              onMouseOut={e=>e.currentTarget.style.background='white'}>Import</button>}
           </div>
         </div>
         <div style={{flex:1,overflowY:'auto',padding:'24px'}}>
           {activeTab==='overview'   &&<OverviewTab   txns={transactions} todos={todos} setTodos={updTodos} auditTags={auditTags} userRole={userRole}/>}
           {activeTab==='carryover'  &&<CarryoverTab  txns={transactions}/>}
           {activeTab==='budget'     &&<BudgetTab     txns={transactions} amendments={amendments} setAmendments={updAmendments}/>}
-          {activeTab==='revenue'    &&<RevenueTab    txns={transactions} events={events} setEvents={updEvents}/>}
+          {activeTab==='revenue'    &&<RevenueTab    txns={transactions} events={events} setEvents={updEvents} userRole={userRole}/>}
           {activeTab==='ledger'     &&<LedgerTab     txns={transactions} enrichments={enrichments} auditTags={auditTags} onJumpToEnrich={id=>{setActiveTab('enrichment');setJumpToId(id);}}/>}
           {activeTab==='enrichment' &&<EnrichmentTab txns={transactions} enrichments={enrichments} setEnrichments={updEnrichments} auditTags={auditTags} setAuditTags={updTags} jumpToId={jumpToId} clearJump={()=>setJumpToId(null)}/>}
           {activeTab==='audit'      &&<AuditSummaryTab txns={transactions} enrichments={enrichments} auditTags={auditTags}/>}
+          {activeTab==='log'        &&<LogTab logs={activityLogs}/>}
         </div>
       </div>
     </div>
