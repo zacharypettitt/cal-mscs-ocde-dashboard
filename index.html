@@ -20,6 +20,7 @@ input:focus,select:focus,textarea:focus{outline:2px solid #3B82F6;outline-offset
   <script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-firestore-compat.js"></script>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj4KICA8Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI1MCIgZmlsbD0iIzFBNkI3QSIvPgogIDxjaXJjbGUgY3g9IjUwIiBjeT0iNTAiIHI9IjM4IiBmaWxsPSJ3aGl0ZSIvPgogIDxyZWN0IHg9IjEyIiB5PSI0MiIgd2lkdGg9Ijc2IiBoZWlnaHQ9IjE2IiBmaWxsPSIjMkFBQjgyIi8+CiAgPHRleHQgeD0iNTAiIHk9IjU0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSJ3aGl0ZSIgZm9udC1zaXplPSI5IiBmb250LXdlaWdodD0iYm9sZCIgZm9udC1mYW1pbHk9IkFyaWFsLHNhbnMtc2VyaWYiPkNBTC1NU0NTPC90ZXh0PgogIDx0ZXh0IHg9IjM0IiB5PSI0MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iIzExMSIgZm9udC1zaXplPSIxNCIgZm9udC1mYW1pbHk9InNlcmlmIj7PgDwvdGV4dD4KICA8Y2lyY2xlIGN4PSI2NiIgY3k9IjMzIiByPSIyLjUiIGZpbGw9IiMxMTEiLz4KICA8ZWxsaXBzZSBjeD0iNjYiIGN5PSIzMyIgcng9IjgiIHJ5PSI0LjUiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzExMSIgc3Ryb2tlLXdpZHRoPSIxLjUiLz4KICA8ZWxsaXBzZSBjeD0iNjYiIGN5PSIzMyIgcng9IjgiIHJ5PSI0LjUiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzExMSIgc3Ryb2tlLXdpZHRoPSIxLjUiIHRyYW5zZm9ybT0icm90YXRlKDYwIDY2IDMzKSIvPgogIDx0ZXh0IHg9IjUwIiB5PSIxMSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0id2hpdGUiIGZvbnQtc2l6ZT0iNSIgZm9udC1mYW1pbHk9IkFyaWFsLHNhbnMtc2VyaWYiPk1BVEhFTUFUSUNTIMK3IFNDSUVOQ0U8L3RleHQ+CiAgPHRleHQgeD0iNTAiIHk9IjkzIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSJ3aGl0ZSIgZm9udC1zaXplPSI1IiBmb250LWZhbWlseT0iQXJpYWwsc2Fucy1zZXJpZiI+Q09NUFVURVIgU0NJRU5DRTwvdGV4dD4KPC9zdmc+">
 </head>
 <body>
 <div id="root"></div>
@@ -165,7 +166,7 @@ function currentFY(){const n=new Date();const yr=n.getFullYear();const mo=n.getM
 
 // Role system
 const ROLES={director:'Director',admin_support:'Admin Support',team_member:'Team Member'};
-const ROLE_TAB_ACCESS={director:null,admin_support:['overview','carryover','budget','revenue','ledger','enrichment','audit'],team_member:['overview','carryover','budget','revenue']};
+const ROLE_TAB_ACCESS={director:null,admin_support:['overview','fiscal','payments','dataaudit'],team_member:['overview','fiscal','payments']};
 
 
 // ── Account labels ────────────────────────────────────────────────────────────
@@ -1250,11 +1251,29 @@ function LoginPage(){
     }
   }
   return(
-    <div style={{minHeight:'100vh',background:'#1B2B4B',display:'flex',alignItems:'center',justifyContent:'center',padding:'24px',fontFamily:'system-ui,sans-serif'}}>
+    <div style={{minHeight:'100vh',background:'#1A6B7A',display:'flex',alignItems:'center',justifyContent:'center',padding:'24px',fontFamily:'system-ui,sans-serif'}}>
       <div style={{width:'100%',maxWidth:'380px'}}>
         <div style={{textAlign:'center',marginBottom:'32px'}}>
-          <div style={{fontSize:'44px',marginBottom:'12px'}}>📊</div>
-          <h1 style={{fontSize:'22px',fontWeight:'700',color:'white',margin:'0 0 6px'}}>CAL-MSCS Dashboard</h1>
+          <svg width="90" height="90" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" style={{marginBottom:'14px'}}>
+          <circle cx="50" cy="50" r="49" fill="rgba(255,255,255,0.12)" stroke="rgba(255,255,255,0.3)" strokeWidth="2"/>
+          <circle cx="50" cy="50" r="38" fill="white"/>
+          <rect x="12" y="42" width="76" height="16" rx="1" fill="#2AAB82"/>
+          <text x="50" y="53.5" textAnchor="middle" fill="white" fontSize="8.5" fontWeight="bold" fontFamily="Arial,sans-serif">CAL-MSCS</text>
+          <text x="34" y="40" textAnchor="middle" fill="#1A1A1A" fontSize="13" fontFamily="Georgia,serif">π</text>
+          <circle cx="66" cy="33" r="2.5" fill="#1A1A1A"/>
+          <ellipse cx="66" cy="33" rx="8" ry="4.5" fill="none" stroke="#1A1A1A" strokeWidth="1.2"/>
+          <ellipse cx="66" cy="33" rx="8" ry="4.5" fill="none" stroke="#1A1A1A" strokeWidth="1.2" transform="rotate(60 66 33)"/>
+          <circle cx="36" cy="66" r="2" fill="#1A1A1A"/>
+          <line x1="36" y1="64" x2="36" y2="59" stroke="#1A1A1A" strokeWidth="1.5"/>
+          <circle cx="50" cy="68" r="2" fill="#1A1A1A"/>
+          <line x1="50" y1="66" x2="50" y2="59" stroke="#1A1A1A" strokeWidth="1.5"/>
+          <circle cx="64" cy="66" r="2" fill="#1A1A1A"/>
+          <line x1="64" y1="64" x2="64" y2="59" stroke="#1A1A1A" strokeWidth="1.5"/>
+          <line x1="36" y1="59" x2="64" y2="59" stroke="#1A1A1A" strokeWidth="1.5"/>
+          <text x="50" y="11" textAnchor="middle" fill="white" fontSize="5" fontFamily="Arial,sans-serif">MATHEMATICS · SCIENCE</text>
+          <text x="50" y="93" textAnchor="middle" fill="white" fontSize="5" fontFamily="Arial,sans-serif">COMPUTER SCIENCE</text>
+        </svg>
+          <h1 style={{fontSize:'22px',fontWeight:'700',color:'white',margin:'0 0 6px'}}>CAL-MSCS<span style={{color:'#2AAB82'}}> Dashboard</span></h1>
           <p style={{color:'#93C5FD',fontSize:'13px',margin:0}}>Orange County Department of Education · Ledger 94</p>
         </div>
         <div style={{background:'rgba(255,255,255,0.07)',borderRadius:'16px',padding:'28px',border:'1px solid rgba(255,255,255,0.12)',display:'flex',flexDirection:'column',gap:'16px'}}>
@@ -1326,6 +1345,374 @@ function TeamPanel({currentUid,currentRole,onClose}){
             </div>
           }
         </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ── Allocation Schedule (extracted from old Revenue Tracker) ──────────────────
+function AllocationView(){
+  const receivedTotal=PAYMENTS.filter(p=>p.status==='received').reduce((s,p)=>s+p.amt,0);
+  const readyTotal=PAYMENTS.filter(p=>p.status==='ready').reduce((s,p)=>s+p.amt,0);
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'12px'}}>
+        <KpiCard label="Received (Pmts 1-3)" value={fmt(receivedTotal)} accent="#059669"/>
+        <KpiCard label="Ready to Invoice (4-6)" value={fmt(readyTotal)} color="#1D4ED8" accent="#1D4ED8"/>
+        <KpiCard label="Remaining (Pmts 7-9)" value={fmt(502280-receivedTotal-readyTotal)} accent="#64748B"/>
+      </div>
+      <Alert type="success">All spending triggers through Payment 8 have been met. Payments 4-6 ({fmt(readyTotal)}) can be invoiced immediately.</Alert>
+      <div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',overflow:'hidden'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{background:'#F8FAFC',borderBottom:'1px solid #E2E8F0'}}>{['Pmt #','Allocation','Grant Year','Amount','Trigger Condition','Status'].map((h,i)=><th key={h} style={{padding:'10px 16px',fontSize:'11px',fontWeight:'700',color:'#64748B',textTransform:'uppercase',textAlign:i===3?'right':'left'}}>{h}</th>)}</tr></thead>
+          <tbody>{PAYMENTS.map(p=>(<tr key={p.n} style={{background:p.status==='ready'?'#EFF6FF':p.status==='pending'?'#FFFBEB':'white',borderBottom:'1px solid #F8FAFC'}}>
+            <td style={{padding:'10px 16px',fontWeight:'700',color:'#1E293B'}}>Pmt {p.n}</td>
+            <td style={{padding:'10px 16px',color:'#64748B'}}>{p.alloc}</td>
+            <td style={{padding:'10px 16px',color:'#64748B'}}>{p.fy}</td>
+            <td style={{padding:'10px 16px',textAlign:'right',fontWeight:'700'}}>{fmt(p.amt)}</td>
+            <td style={{padding:'10px 16px',color:'#64748B',fontSize:'12px'}}>{p.trigger}</td>
+            <td style={{padding:'10px 16px'}}><StatusBadge status={p.status}/></td>
+          </tr>))}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── Fiscal Health Tab (Year Detail + Multi-Year + Allocation Schedule) ─────────
+function FiscalHealthTab({txns,amendments,setAmendments}){
+  const [view,setView]=useState('year');
+  const tabBtn=(k,l)=><button onClick={()=>setView(k)} style={{padding:'7px 16px',borderRadius:'8px',fontSize:'13px',fontWeight:'600',border:'1px solid',cursor:'pointer',background:view===k?'#1D4ED8':'white',color:view===k?'white':'#64748B',borderColor:view===k?'#1D4ED8':'#E2E8F0'}}>{l}</button>;
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:'18px'}}>
+      <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
+        {tabBtn('year','Year Detail')}
+        {tabBtn('multiyear','Multi-Year')}
+        {tabBtn('allocation','Allocation Schedule')}
+      </div>
+      {view==='year'&&<BudgetTab txns={txns} amendments={amendments} setAmendments={setAmendments}/>}
+      {view==='multiyear'&&<CarryoverTab txns={txns}/>}
+      {view==='allocation'&&<AllocationView/>}
+    </div>
+  );
+}
+
+// ── Data & Audit Tab (Ledger + Enrichment + Summary) ──────────────────────────
+function DataAuditTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,jumpToId,clearJump,initialView,onViewChange,onJumpToEnrich}){
+  const [view,setView]=useState(initialView||'ledger');
+  function setViewAndNotify(v){setView(v);if(onViewChange)onViewChange(v);}
+  useEffect(()=>{if(initialView&&initialView!==view)setView(initialView);},[initialView]);
+  const tabBtn=(k,l)=><button onClick={()=>setViewAndNotify(k)} style={{padding:'7px 16px',borderRadius:'8px',fontSize:'13px',fontWeight:'600',border:'1px solid',cursor:'pointer',background:view===k?'#1D4ED8':'white',color:view===k?'white':'#64748B',borderColor:view===k?'#1D4ED8':'#E2E8F0'}}>{l}</button>;
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:'18px'}}>
+      <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
+        {tabBtn('ledger','Transaction Ledger')}
+        {tabBtn('enrichment','Enrichment & Audit')}
+        {tabBtn('audit','Audit Summary')}
+      </div>
+      {view==='ledger'&&<LedgerTab txns={txns} enrichments={enrichments} auditTags={auditTags} onJumpToEnrich={onJumpToEnrich}/>}
+      {view==='enrichment'&&<EnrichmentTab txns={txns} enrichments={enrichments} setEnrichments={setEnrichments} auditTags={auditTags} setAuditTags={setAuditTags} jumpToId={jumpToId} clearJump={clearJump}/>}
+      {view==='audit'&&<AuditSummaryTab txns={txns} enrichments={enrichments} auditTags={auditTags}/>}
+    </div>
+  );
+}
+
+// ── Partner Payments Tab ───────────────────────────────────────────────────────
+const PAY_STATUSES={
+  draft:      {label:'Draft',            color:'#64748B',bg:'#F1F5F9',step:0},
+  agreement:  {label:'Agreement Signed', color:'#1D4ED8',bg:'#DBEAFE',step:1},
+  submitted:  {label:'Submitted to AP',  color:'#D97706',bg:'#FEF3C7',step:2},
+  processing: {label:'Processing',       color:'#7C3AED',bg:'#EDE9FE',step:3},
+  paid:       {label:'Paid',             color:'#059669',bg:'#D1FAE5',step:4},
+};
+const STATUS_ORDER=['draft','agreement','submitted','processing','paid'];
+const PAY_TYPES=['Stipend','Travel','Services','Materials','Other'];
+const RECIP_TYPES=['LEA','COE','Individual','Vendor','Other'];
+const EMPTY_PAY={recipient:'',recipientType:'Individual',paymentType:'Services',description:'',amount:'',fundingSource:'primary',fyYear:'',agreementRef:'',expectedDate:'',txnId:'',paidDate:'',paidAmount:''};
+
+function PartnerPaymentsTab({payments,userRole}){
+  const canManage=userRole==='director'||userRole==='admin_support';
+  const [filterSource,setFilterSource]=useState('');
+  const [filterStatus,setFilterStatus]=useState('');
+  const [filterType,setFilterType]=useState('');
+  const [filterFY,setFilterFY]=useState('');
+  const [search,setSearch]=useState('');
+  const [expandedId,setExpandedId]=useState(null);
+  const [showAdd,setShowAdd]=useState(false);
+  const [editId,setEditId]=useState(null);
+  const [noteInputId,setNoteInputId]=useState(null);
+  const [noteText,setNoteText]=useState('');
+  const [statusEditId,setStatusEditId]=useState(null);
+  const [statusForm,setStatusForm]=useState({status:'',note:''});
+  const [form,setForm]=useState({...EMPTY_PAY,fyYear:currentFY()});
+
+  const filtered=useMemo(()=>{
+    let r=payments;
+    if(search){const q=search.toLowerCase();r=r.filter(p=>(p.recipient||'').toLowerCase().includes(q)||(p.description||'').toLowerCase().includes(q));}
+    if(filterSource) r=r.filter(p=>p.fundingSource===filterSource);
+    if(filterStatus) r=r.filter(p=>p.status===filterStatus);
+    if(filterType) r=r.filter(p=>p.paymentType===filterType);
+    if(filterFY) r=r.filter(p=>p.fyYear===filterFY);
+    return[...r].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+  },[payments,search,filterSource,filterStatus,filterType,filterFY]);
+
+  const totalAmt=payments.reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
+  const unpaidAmt=payments.filter(p=>p.status!=='paid').reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
+  const unpaidN=payments.filter(p=>p.status!=='paid').length;
+  const paidAmt=payments.filter(p=>p.status==='paid').reduce((s,p)=>s+(parseFloat(p.paidAmount||p.amount)||0),0);
+
+  async function handleAdd(){
+    if(!form.recipient.trim()||!form.amount) return;
+    const u=_auth.currentUser;if(!u) return;
+    const id='p'+Date.now();const now=new Date().toISOString().slice(0,10);
+    await FS.payment(id,{...form,id,amount:parseFloat(form.amount)||0,paidAmount:parseFloat(form.paidAmount)||0,status:'draft',
+      statusHistory:[{status:'draft',note:'Payment record created',updatedBy:u.displayName||u.email,updatedAt:now}],
+      notes:[],createdAt:now,createdBy:u.displayName||u.email,createdByEmail:u.email});
+    logActivity('payment_added',`Added payment: "${form.recipient}" — ${fmt(parseFloat(form.amount)||0)}`,{type:form.paymentType,source:form.fundingSource});
+    setShowAdd(false);setForm({...EMPTY_PAY,fyYear:currentFY()});
+  }
+  async function handleUpdate(){
+    if(!form.recipient.trim()) return;
+    await FS.paymentUpdate(editId,{recipient:form.recipient,recipientType:form.recipientType,paymentType:form.paymentType,description:form.description,amount:parseFloat(form.amount)||0,fundingSource:form.fundingSource,fyYear:form.fyYear,agreementRef:form.agreementRef,expectedDate:form.expectedDate,txnId:form.txnId||'',paidDate:form.paidDate||'',paidAmount:parseFloat(form.paidAmount)||0});
+    logActivity('payment_edited',`Edited payment: "${form.recipient}"`,{id:editId});
+    setEditId(null);
+  }
+  async function handleDelete(p){
+    if(!window.confirm(`Delete payment for "${p.recipient}"? This cannot be undone.`)) return;
+    await FS.paymentDelete(p.id);
+    logActivity('payment_deleted',`Deleted payment: "${p.recipient}" — ${fmt(parseFloat(p.amount)||0)}`,{id:p.id});
+  }
+  async function handleStatusUpdate(p){
+    if(!statusForm.status) return;
+    const u=_auth.currentUser;if(!u) return;
+    const now=new Date().toISOString().slice(0,10);
+    const newHist=[...(p.statusHistory||[]),{status:statusForm.status,note:statusForm.note,updatedBy:u.displayName||u.email,updatedAt:now}];
+    const upd={status:statusForm.status,statusHistory:newHist};
+    if(statusForm.status==='paid') upd.paidDate=upd.paidDate||now;
+    await FS.paymentUpdate(p.id,upd);
+    logActivity('payment_status',`"${p.recipient}" → ${PAY_STATUSES[statusForm.status]?.label}`,{id:p.id,status:statusForm.status,note:statusForm.note});
+    setStatusEditId(null);setStatusForm({status:'',note:''});
+  }
+  async function handleAddNote(p){
+    if(!noteText.trim()) return;
+    const u=_auth.currentUser;if(!u) return;
+    const note={id:'n'+Date.now(),text:noteText.trim(),author:u.displayName||u.email,authorEmail:u.email,authorPhoto:u.photoURL||null,createdAt:new Date().toISOString().slice(0,10)};
+    await FS.paymentUpdate(p.id,{notes:[...(p.notes||[]),note]});
+    logActivity('payment_note',`Added note to "${p.recipient}"`,{id:p.id});
+    setNoteText('');setNoteInputId(null);
+  }
+  function startEdit(p){setEditId(p.id);setForm({recipient:p.recipient||'',recipientType:p.recipientType||'Individual',paymentType:p.paymentType||'Services',description:p.description||'',amount:String(p.amount||''),fundingSource:p.fundingSource||'primary',fyYear:p.fyYear||currentFY(),agreementRef:p.agreementRef||'',expectedDate:p.expectedDate||'',txnId:p.txnId||'',paidDate:p.paidDate||'',paidAmount:String(p.paidAmount||'')});}
+
+  const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'7px 10px',fontSize:'13px',width:'100%'};
+  const srcLabel={primary:'Primary Allocation',coe:'COE Reimbursement'};
+  const srcColor={primary:{bg:'#DBEAFE',c:'#1D4ED8'},coe:{bg:'#FEF3C7',c:'#92400E'}};
+
+  function PayForm({onSave,onCancel,saveLabel}){
+    return(
+      <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
+        <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr',gap:'10px'}}>
+          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Recipient Name *</label><input value={form.recipient} onChange={e=>setForm(p=>({...p,recipient:e.target.value}))} placeholder="Organization or individual name" style={inp}/></div>
+          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Recipient Type</label><select value={form.recipientType} onChange={e=>setForm(p=>({...p,recipientType:e.target.value}))} style={inp}>{RECIP_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
+          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Payment Type</label><select value={form.paymentType} onChange={e=>setForm(p=>({...p,paymentType:e.target.value}))} style={inp}>{PAY_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
+        </div>
+        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Description / Purpose *</label><textarea value={form.description} onChange={e=>setForm(p=>({...p,description:e.target.value}))} placeholder="Describe what this payment is for..." rows={2} style={{...inp,resize:'none'}}/></div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:'10px'}}>
+          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Expected Amount *</label><input type="number" value={form.amount} onChange={e=>setForm(p=>({...p,amount:e.target.value}))} placeholder="0.00" style={inp}/></div>
+          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Funding Source</label><select value={form.fundingSource} onChange={e=>setForm(p=>({...p,fundingSource:e.target.value}))} style={inp}><option value="primary">Primary Allocation</option><option value="coe">COE Reimbursement</option></select></div>
+          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Fiscal Year</label><select value={form.fyYear} onChange={e=>setForm(p=>({...p,fyYear:e.target.value}))} style={inp}>{FY_LIST.map(f=><option key={f} value={f}>{f}</option>)}</select></div>
+          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Agreement Ref #</label><input value={form.agreementRef} onChange={e=>setForm(p=>({...p,agreementRef:e.target.value}))} placeholder="MOU #, PO #, etc." style={inp}/></div>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:'10px'}}>
+          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Expected Pay Date</label><input type="date" value={form.expectedDate} onChange={e=>setForm(p=>({...p,expectedDate:e.target.value}))} style={inp}/></div>
+          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Actual Pay Date</label><input type="date" value={form.paidDate} onChange={e=>setForm(p=>({...p,paidDate:e.target.value}))} style={inp}/></div>
+          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Actual Amount Paid</label><input type="number" value={form.paidAmount} onChange={e=>setForm(p=>({...p,paidAmount:e.target.value}))} placeholder="0.00" style={inp}/></div>
+          <div><label style={{display:'block',fontSize:'11px',color:'#059669',fontWeight:'600',marginBottom:'3px'}}>Ledger Txn ID</label><input value={form.txnId} onChange={e=>setForm(p=>({...p,txnId:e.target.value}))} placeholder="Link to ledger entry" style={{...inp,background:'#ECFDF5',borderColor:'#A7F3D0'}}/></div>
+        </div>
+        <div style={{display:'flex',gap:'8px',justifyContent:'flex-end',paddingTop:'4px'}}>
+          <button onClick={onCancel} style={{border:'1px solid #E2E8F0',background:'white',borderRadius:'8px',padding:'8px 16px',cursor:'pointer',color:'#64748B',fontSize:'13px'}}>Cancel</button>
+          <button onClick={onSave} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontWeight:'600',cursor:'pointer',fontSize:'13px'}}>{saveLabel}</button>
+        </div>
+      </div>
+    );
+  }
+
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
+      {/* Summary */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'12px'}}>
+        <KpiCard label="Total Tracked" value={fmt(totalAmt)} sub={payments.length+' payments'} accent="#64748B"/>
+        <KpiCard label="Outstanding" value={fmt(unpaidAmt)} sub={unpaidN+' not yet paid'} color="#DC2626" accent="#DC2626"/>
+        <KpiCard label="Paid" value={fmt(paidAmt)} sub={payments.filter(p=>p.status==='paid').length+' completed'} color="#059669" accent="#059669"/>
+      </div>
+
+      {/* Filters + Add */}
+      <div style={{display:'flex',gap:'8px',flexWrap:'wrap',alignItems:'center'}}>
+        <input placeholder="Search recipient or description..." value={search} onChange={e=>setSearch(e.target.value)} style={{...inp,flex:'2',minWidth:'200px'}}/>
+        <select value={filterSource} onChange={e=>setFilterSource(e.target.value)} style={{...inp,flex:1,minWidth:'140px'}}><option value="">All Funding Sources</option><option value="primary">Primary Allocation</option><option value="coe">COE Reimbursement</option></select>
+        <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} style={{...inp,flex:1,minWidth:'140px'}}><option value="">All Statuses</option>{STATUS_ORDER.map(s=><option key={s} value={s}>{PAY_STATUSES[s].label}</option>)}</select>
+        <select value={filterType} onChange={e=>setFilterType(e.target.value)} style={{...inp,flex:1,minWidth:'110px'}}><option value="">All Types</option>{PAY_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select>
+        <select value={filterFY} onChange={e=>setFilterFY(e.target.value)} style={{...inp,flex:1,minWidth:'100px'}}><option value="">All Years</option>{FY_LIST.map(f=><option key={f} value={f}>{f}</option>)}</select>
+        {canManage&&<button onClick={()=>{setShowAdd(true);setEditId(null);setForm({...EMPTY_PAY,fyYear:currentFY()});}} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontWeight:'600',cursor:'pointer',whiteSpace:'nowrap'}}>+ Add Payment</button>}
+      </div>
+
+      {/* Add form */}
+      {showAdd&&canManage&&(
+        <div style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
+          <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>New Payment Record</div>
+          <PayForm onSave={handleAdd} onCancel={()=>setShowAdd(false)} saveLabel="Create Payment"/>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {filtered.length===0&&<div style={{background:'white',border:'2px dashed #E2E8F0',borderRadius:'12px',padding:'40px',textAlign:'center'}}><div style={{fontSize:'32px',marginBottom:'8px'}}>💳</div><p style={{color:'#64748B',fontWeight:'500',margin:0}}>{payments.length===0?'No payments tracked yet.':'No payments match your filters.'}</p>{canManage&&payments.length===0&&<p style={{color:'#94A3B8',fontSize:'13px',margin:'6px 0 0'}}>Click "+ Add Payment" to start tracking outgoing payments.</p>}</div>}
+
+      {/* Payment cards */}
+      <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+        {filtered.map(p=>{
+          const ps=PAY_STATUSES[p.status]||PAY_STATUSES.draft;
+          const sc=srcColor[p.fundingSource]||srcColor.primary;
+          const isExpanded=expandedId===p.id;
+          const isEditing=editId===p.id;
+          const isStatusEdit=statusEditId===p.id;
+          const curStep=PAY_STATUSES[p.status]?.step||0;
+
+          if(isEditing) return(
+            <div key={p.id} style={{background:'#EFF6FF',border:'2px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
+              <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>Editing: {p.recipient}</div>
+              <PayForm onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes"/>
+            </div>
+          );
+
+          return(
+            <div key={p.id} style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',overflow:'hidden'}}>
+              {/* Card header */}
+              <div style={{display:'flex',alignItems:'flex-start',gap:'14px',padding:'14px 16px',cursor:'pointer'}} onClick={()=>setExpandedId(isExpanded?null:p.id)}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap',marginBottom:'5px'}}>
+                    <span style={{fontWeight:'700',color:'#1E293B',fontSize:'14px'}}>{p.recipient}</span>
+                    <span style={{padding:'2px 7px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#F3F4F6',color:'#374151'}}>{p.recipientType}</span>
+                    <span style={{padding:'2px 7px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#F3F4F6',color:'#374151'}}>{p.paymentType}</span>
+                    <span style={{padding:'2px 7px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:sc.bg,color:sc.c}}>{srcLabel[p.fundingSource]||p.fundingSource}</span>
+                    <span style={{fontSize:'11px',color:'#94A3B8'}}>{p.fyYear}</span>
+                  </div>
+                  <div style={{fontSize:'13px',color:'#475569',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'500px'}}>{p.description}</div>
+                  {(p.notes||[]).length>0&&<div style={{fontSize:'11px',color:'#94A3B8',marginTop:'4px'}}>{p.notes.length} note{p.notes.length!==1?'s':''}</div>}
+                </div>
+                <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'6px',flexShrink:0}}>
+                  <div style={{fontWeight:'700',fontSize:'16px',color:'#1E293B'}}>{fmt(parseFloat(p.amount)||0)}</div>
+                  <span style={{padding:'3px 10px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:ps.bg,color:ps.color}}>{ps.label}</span>
+                  {p.status==='paid'&&p.paidAmount&&p.paidAmount!==p.amount&&<div style={{fontSize:'11px',color:'#059669'}}>Paid: {fmt(parseFloat(p.paidAmount)||0)}</div>}
+                </div>
+                <div style={{color:'#94A3B8',fontSize:'14px',flexShrink:0,marginTop:'2px'}}>{isExpanded?'▲':'▼'}</div>
+              </div>
+
+              {/* Lifecycle bar */}
+              <div style={{display:'flex',padding:'0 16px 10px',gap:'4px',alignItems:'center'}}>
+                {STATUS_ORDER.map((s,i)=>{
+                  const done=i<=curStep;const current=s===p.status;
+                  const ps2=PAY_STATUSES[s];
+                  return(<React.Fragment key={s}>
+                    <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:'2px'}}>
+                      <div style={{width:'10px',height:'10px',borderRadius:'50%',background:done?ps2.color:'#E2E8F0',border:current?`2px solid ${ps2.color}`:'none',transition:'all .2s'}}/>
+                      <span style={{fontSize:'9px',color:done?ps2.color:'#CBD5E1',fontWeight:current?'700':'400',whiteSpace:'nowrap'}}>{ps2.label}</span>
+                    </div>
+                    {i<STATUS_ORDER.length-1&&<div style={{flex:1,height:'2px',background:i<curStep?'#93C5FD':'#E2E8F0',marginBottom:'14px'}}/>}
+                  </React.Fragment>);
+                })}
+              </div>
+
+              {/* Expanded details */}
+              {isExpanded&&(
+                <div style={{borderTop:'1px solid #F1F5F9',padding:'16px',display:'flex',flexDirection:'column',gap:'14px'}}>
+                  {/* Details row */}
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'10px',background:'#F8FAFC',borderRadius:'8px',padding:'12px'}}>
+                    {[['Agreement Ref',p.agreementRef||'—'],['Expected Date',p.expectedDate||'—'],['Paid Date',p.paidDate||'—'],['Ledger Txn ID',p.txnId||'—']].map(([l,v])=>(
+                      <div key={l}><div style={{fontSize:'10px',color:'#94A3B8',fontWeight:'600',marginBottom:'2px'}}>{l}</div><div style={{fontSize:'12px',fontWeight:'600',color:v==='—'?'#CBD5E1':'#1E293B',fontFamily:l==='Ledger Txn ID'?'monospace':'inherit'}}>{v}</div></div>
+                    ))}
+                  </div>
+
+                  {/* Status update */}
+                  {canManage&&p.status!=='paid'&&(
+                    isStatusEdit?(
+                      <div style={{background:'#FFFBEB',border:'1px solid #FDE68A',borderRadius:'10px',padding:'14px',display:'flex',flexDirection:'column',gap:'10px'}}>
+                        <div style={{fontWeight:'600',color:'#92400E',fontSize:'13px'}}>Update Status</div>
+                        <div style={{display:'grid',gridTemplateColumns:'1fr 2fr auto',gap:'8px',alignItems:'flex-end'}}>
+                          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>New Status</label>
+                            <select value={statusForm.status} onChange={e=>setStatusForm(f=>({...f,status:e.target.value}))} style={inp}>
+                              <option value="">Select status...</option>
+                              {STATUS_ORDER.filter(s=>PAY_STATUSES[s].step>curStep).map(s=><option key={s} value={s}>{PAY_STATUSES[s].label}</option>)}
+                            </select>
+                          </div>
+                          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Action taken / Note</label><input value={statusForm.note} onChange={e=>setStatusForm(f=>({...f,note:e.target.value}))} placeholder="Describe what was done to advance this payment..." style={inp}/></div>
+                          <div style={{display:'flex',gap:'6px'}}>
+                            <button onClick={()=>{setStatusEditId(null);setStatusForm({status:'',note:''}); }} style={{border:'1px solid #E2E8F0',background:'white',borderRadius:'7px',padding:'7px 12px',cursor:'pointer',color:'#64748B',fontSize:'12px'}}>Cancel</button>
+                            <button onClick={()=>handleStatusUpdate(p)} disabled={!statusForm.status} style={{background:statusForm.status?'#D97706':'#E2E8F0',color:statusForm.status?'white':'#94A3B8',border:'none',borderRadius:'7px',padding:'7px 12px',fontWeight:'600',cursor:statusForm.status?'pointer':'not-allowed',fontSize:'12px'}}>Update</button>
+                          </div>
+                        </div>
+                      </div>
+                    ):(<button onClick={()=>{setStatusEditId(p.id);setStatusForm({status:'',note:''}); }} style={{background:'#FFF7ED',border:'1px solid #FED7AA',borderRadius:'8px',padding:'8px 14px',cursor:'pointer',color:'#D97706',fontSize:'12px',fontWeight:'600',alignSelf:'flex-start'}}>Update Status →</button>)
+                  )}
+
+                  {/* Status history */}
+                  {(p.statusHistory||[]).length>0&&(
+                    <div>
+                      <div style={{fontSize:'11px',color:'#64748B',fontWeight:'700',letterSpacing:'0.05em',textTransform:'uppercase',marginBottom:'8px'}}>Status History</div>
+                      <div style={{display:'flex',flexDirection:'column',gap:'6px'}}>
+                        {[...(p.statusHistory||[])].reverse().map((h,i)=>{
+                          const hs=PAY_STATUSES[h.status]||PAY_STATUSES.draft;
+                          return(<div key={i} style={{display:'flex',gap:'10px',alignItems:'flex-start'}}>
+                            <div style={{width:'8px',height:'8px',borderRadius:'50%',background:hs.color,flexShrink:0,marginTop:'4px'}}/>
+                            <div style={{flex:1}}>
+                              <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
+                                <span style={{fontWeight:'600',fontSize:'12px',color:hs.color}}>{hs.label}</span>
+                                <span style={{fontSize:'11px',color:'#94A3B8'}}>{h.updatedAt} · {h.updatedBy}</span>
+                              </div>
+                              {h.note&&<div style={{fontSize:'12px',color:'#475569',marginTop:'2px'}}>{h.note}</div>}
+                            </div>
+                          </div>);
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Notes thread */}
+                  <div>
+                    <div style={{fontSize:'11px',color:'#64748B',fontWeight:'700',letterSpacing:'0.05em',textTransform:'uppercase',marginBottom:'8px'}}>Notes ({(p.notes||[]).length})</div>
+                    {(p.notes||[]).length===0&&noteInputId!==p.id&&<p style={{fontSize:'12px',color:'#94A3B8',margin:'0 0 8px'}}>No notes yet.</p>}
+                    <div style={{display:'flex',flexDirection:'column',gap:'6px',marginBottom:'8px'}}>
+                      {(p.notes||[]).map(n=>(
+                        <div key={n.id} style={{display:'flex',gap:'10px',background:'#F8FAFC',borderRadius:'8px',padding:'10px 12px'}}>
+                          {n.authorPhoto?<img src={n.authorPhoto} alt="" style={{width:'24px',height:'24px',borderRadius:'50%',flexShrink:0}}/>:<div style={{width:'24px',height:'24px',borderRadius:'50%',background:'#E2E8F0',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',flexShrink:0}}>👤</div>}
+                          <div style={{flex:1}}><div style={{fontSize:'11px',color:'#64748B',marginBottom:'3px'}}><strong style={{color:'#334155'}}>{n.author}</strong> · {n.createdAt}</div><div style={{fontSize:'13px',color:'#1E293B'}}>{n.text}</div></div>
+                        </div>
+                      ))}
+                    </div>
+                    {noteInputId===p.id?(
+                      <div style={{display:'flex',gap:'8px',alignItems:'flex-end'}}>
+                        <textarea value={noteText} onChange={e=>setNoteText(e.target.value)} placeholder="Add a note about this payment..." rows={2} style={{...inp,flex:1,resize:'none'}}/>
+                        <div style={{display:'flex',flexDirection:'column',gap:'5px'}}>
+                          <button onClick={()=>handleAddNote(p)} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'7px',padding:'7px 12px',fontSize:'12px',fontWeight:'600',cursor:'pointer'}}>Save</button>
+                          <button onClick={()=>{setNoteInputId(null);setNoteText('');}} style={{border:'1px solid #E2E8F0',background:'white',borderRadius:'7px',padding:'7px 12px',fontSize:'12px',cursor:'pointer',color:'#64748B'}}>Cancel</button>
+                        </div>
+                      </div>
+                    ):(
+                      <button onClick={()=>{setNoteInputId(p.id);setNoteText('');}} style={{background:'none',border:'1px solid #E2E8F0',borderRadius:'7px',padding:'6px 12px',cursor:'pointer',color:'#64748B',fontSize:'12px'}}>+ Add note</button>
+                    )}
+                  </div>
+
+                  {/* Card actions */}
+                  {canManage&&(
+                    <div style={{display:'flex',gap:'8px',paddingTop:'4px',borderTop:'1px solid #F1F5F9'}}>
+                      <button onClick={(e)=>{e.stopPropagation();startEdit(p);setExpandedId(null);}} style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'7px',padding:'6px 12px',cursor:'pointer',color:'#1D4ED8',fontSize:'12px',fontWeight:'600'}}>Edit Payment</button>
+                      <button onClick={(e)=>{e.stopPropagation();handleDelete(p);}} style={{background:'none',border:'1px solid #FECACA',borderRadius:'7px',padding:'6px 12px',cursor:'pointer',color:'#991B1B',fontSize:'12px'}}>Delete</button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1451,14 +1838,11 @@ function LogTab({logs}){
 
 
 const TABS=[
-  {id:'overview',   label:'Overview',           icon:'📊'},
-  {id:'carryover',  label:'Carryover',           icon:'📈'},
-  {id:'budget',     label:'Budget vs. Actual',   icon:'📋'},
-  {id:'revenue',    label:'Revenue Tracker',     icon:'💰'},
-  {id:'ledger',     label:'Transaction Ledger',  icon:'📄'},
-  {id:'enrichment', label:'Enrichment & Audit',  icon:'✏️'},
-  {id:'audit',      label:'Audit Summary',       icon:'🏷️'},
-  {id:'log',        label:'Activity Log',        icon:'📋'},
+  {id:'overview',  label:'Overview',          icon:'📊'},
+  {id:'fiscal',    label:'Fiscal Health',     icon:'📋'},
+  {id:'payments',  label:'Partner Payments',  icon:'💳'},
+  {id:'dataaudit', label:'Data & Audit',      icon:'📄'},
+  {id:'log',       label:'Activity Log',      icon:'📋'},
 ];
 
 
@@ -1478,8 +1862,11 @@ function App(){
   const [todos,setTodos]=useState([]);
   const [events,setEvents]=useState([]);
   const [amendments,setAmendments]=useState([]);
+  const [payments,setPayments]=useState([]);
+
   const [activeTab,setActiveTab]=useState('overview');
   const [jumpToId,setJumpToId]=useState(null);
+  const [dataAuditView,setDataAuditView]=useState('ledger');
   const [showUpload,setShowUpload]=useState(false);
   const enrTimer=useRef(null);
 
@@ -1510,10 +1897,11 @@ function App(){
       _col('auditTags').onSnapshot(s=>{setAuditTags(s.exists?s.data().data||{}:{});done();}),
       _col('enrichments').onSnapshot(s=>{setEnrichments(s.exists?s.data().data||{}:{});done();}),
     ];
-    return()=>subs.forEach(u=>u());
+    // Payments subscription (independent, doesn't block main load)
+    const paymentsSub=_db.collection('payments').onSnapshot(s=>{setPayments(s.docs.map(d=>({...d.data(),id:d.id})));},e=>console.error('Payments:',e));
+    return()=>{subs.forEach(u=>u());paymentsSub();};
   },[user,roleLoading]);
 
-  // Activity log — directors only
   useEffect(()=>{
     if(userRole!=='director')return;
     return _db.collection('activityLog').orderBy('timestamp','desc').limit(500)
@@ -1534,26 +1922,34 @@ function App(){
     logActivity('data_imported',`Imported ${toW.length} transactions (${mode} mode)`,{count:toW.length,mode});
   }
 
+  function jumpToEnrich(id){
+    setActiveTab('dataaudit');
+    setDataAuditView('enrichment');
+    setJumpToId(id);
+  }
+
   const allowedTabIds=ROLE_TAB_ACCESS[userRole];
   const visibleTabs=allowedTabIds?TABS.filter(t=>allowedTabIds.includes(t.id)):TABS;
   useEffect(()=>{if(visibleTabs.length&&!visibleTabs.find(t=>t.id===activeTab))setActiveTab(visibleTabs[0].id);},[userRole]);
 
-  // Untagged count (transactions with NO tags at all)
   const untaggedCount=useMemo(()=>transactions.filter(t=>!(auditTags[t.id]&&auditTags[t.id].length>0)).length,[transactions,auditTags]);
   const untaggedLabel=untaggedCount>=1000?(untaggedCount/1000).toFixed(1)+'k':String(untaggedCount);
-
   const canManage=userRole==='director'||userRole==='admin_support';
   const activeTabInfo=visibleTabs.find(t=>t.id===activeTab)||visibleTabs[0]||TABS[0];
 
-  if(authLoading)return(<div style={{minHeight:'100vh',background:'#1B2B4B',display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{color:'#93C5FD',fontSize:'14px'}}>Loading...</div></div>);
+  if(authLoading)return(<div style={{minHeight:'100vh',background:'#1A6B7A',display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{color:'#93C5FD'}}>Loading...</div></div>);
   if(!user)return <LoginPage/>;
   if(roleLoading||dataLoading||txnLoading)return(
-    <div style={{minHeight:'100vh',background:'#1B2B4B',display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{textAlign:'center'}}>
-        <div style={{fontSize:'36px',marginBottom:'12px'}}>📊</div>
-        <div style={{color:'#93C5FD',fontSize:'14px'}}>Loading dashboard...</div>
-        <div style={{color:'rgba(147,197,253,0.5)',fontSize:'12px',marginTop:'6px'}}>Syncing from Firestore</div>
-      </div>
+    <div style={{minHeight:'100vh',background:'#1A6B7A',display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{textAlign:'center'}}><svg width="64" height="64" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" style={{marginBottom:'14px'}}>
+            <circle cx="50" cy="50" r="49" fill="rgba(255,255,255,0.1)" stroke="rgba(255,255,255,0.25)" strokeWidth="2"/>
+            <circle cx="50" cy="50" r="38" fill="white"/>
+            <rect x="12" y="42" width="76" height="16" fill="#2AAB82"/>
+            <text x="50" y="53.5" textAnchor="middle" fill="white" fontSize="8.5" fontWeight="bold" fontFamily="Arial,sans-serif">CAL-MSCS</text>
+            <text x="34" y="40" textAnchor="middle" fill="#1A1A1A" fontSize="13" fontFamily="Georgia,serif">π</text>
+            <circle cx="66" cy="33" r="2.5" fill="#1A1A1A"/>
+            <ellipse cx="66" cy="33" rx="8" ry="4.5" fill="none" stroke="#1A1A1A" strokeWidth="1.2"/>
+          </svg><div style={{color:'#93C5FD',fontSize:'14px'}}>Loading dashboard...</div><div style={{color:'rgba(147,197,253,0.5)',fontSize:'12px',marginTop:'6px'}}>Syncing from Firestore</div></div>
     </div>
   );
 
@@ -1562,46 +1958,50 @@ function App(){
       {showUpload&&<UploadModal onClose={()=>setShowUpload(false)} onImport={handleImport} existingCount={transactions.length}/>}
       {showTeamPanel&&<TeamPanel currentUid={user.uid} currentRole={userRole} onClose={()=>setShowTeamPanel(false)}/>}
 
-      <div style={{width:'220px',flexShrink:0,display:'flex',flexDirection:'column',background:'#1B2B4B'}}>
-        <div style={{padding:'20px 18px 16px',borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
-          <div style={{fontSize:'10px',fontWeight:'700',letterSpacing:'0.12em',color:'#93C5FD',textTransform:'uppercase',marginBottom:'3px'}}>CAL-MSCS</div>
-          <div style={{color:'white',fontWeight:'700',fontSize:'14px',lineHeight:'1.3'}}>Financial Dashboard</div>
-          <div style={{color:'#93C5FD',fontSize:'11px',marginTop:'2px'}}>OCDE · Ledger 94</div>
+      <div style={{width:'220px',flexShrink:0,display:'flex',flexDirection:'column',background:'#1A6B7A'}}>
+        <div style={{padding:'14px 14px 12px',borderBottom:'1px solid rgba(255,255,255,0.15)',display:'flex',alignItems:'center',gap:'12px'}}>
+          <svg width="52" height="52" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" style={{flexShrink:0}}>
+          <circle cx="50" cy="50" r="49" fill="#1A6B7A" stroke="rgba(255,255,255,0.35)" strokeWidth="2"/>
+          <circle cx="50" cy="50" r="38" fill="white"/>
+          <rect x="12" y="42" width="76" height="16" rx="1" fill="#2AAB82"/>
+          <text x="50" y="53.5" textAnchor="middle" fill="white" fontSize="8.5" fontWeight="bold" fontFamily="Arial,sans-serif">CAL-MSCS</text>
+          <text x="34" y="40" textAnchor="middle" fill="#1A1A1A" fontSize="13" fontFamily="Georgia,serif">π</text>
+          <circle cx="66" cy="33" r="2.5" fill="#1A1A1A"/>
+          <ellipse cx="66" cy="33" rx="8" ry="4.5" fill="none" stroke="#1A1A1A" strokeWidth="1.2"/>
+          <ellipse cx="66" cy="33" rx="8" ry="4.5" fill="none" stroke="#1A1A1A" strokeWidth="1.2" transform="rotate(60 66 33)"/>
+          <circle cx="36" cy="66" r="2" fill="#1A1A1A"/>
+          <line x1="36" y1="64" x2="36" y2="59" stroke="#1A1A1A" strokeWidth="1.5"/>
+          <circle cx="50" cy="68" r="2" fill="#1A1A1A"/>
+          <line x1="50" y1="66" x2="50" y2="59" stroke="#1A1A1A" strokeWidth="1.5"/>
+          <circle cx="64" cy="66" r="2" fill="#1A1A1A"/>
+          <line x1="64" y1="64" x2="64" y2="59" stroke="#1A1A1A" strokeWidth="1.5"/>
+          <line x1="36" y1="59" x2="64" y2="59" stroke="#1A1A1A" strokeWidth="1.5"/>
+          <text x="50" y="11" textAnchor="middle" fill="white" fontSize="5" fontFamily="Arial,sans-serif">MATHEMATICS · SCIENCE</text>
+          <text x="50" y="93" textAnchor="middle" fill="white" fontSize="5" fontFamily="Arial,sans-serif">COMPUTER SCIENCE</text>
+        </svg>
+          <div>
+            <div style={{color:'white',fontWeight:'700',fontSize:'12px',lineHeight:'1.4'}}>Financial Dashboard</div>
+            <div style={{color:'rgba(255,255,255,0.55)',fontSize:'10px',marginTop:'2px'}}>OCDE · Ledger 94</div>
+          </div>
         </div>
         <nav style={{flex:1,padding:'10px 0',overflowY:'auto'}}>
           {visibleTabs.map(tab=>(
             <button key={tab.id} onClick={()=>setActiveTab(tab.id)}
-              style={{width:'100%',display:'flex',alignItems:'center',gap:'10px',padding:'10px 18px',fontSize:'13px',background:activeTab===tab.id?'rgba(255,255,255,0.15)':'transparent',color:activeTab===tab.id?'white':'#93C5FD',border:'none',cursor:'pointer',textAlign:'left',fontWeight:activeTab===tab.id?'700':'400'}}
+              style={{width:'100%',display:'flex',alignItems:'center',gap:'10px',padding:'10px 15px 10px 18px',fontSize:'13px',background:activeTab===tab.id?'rgba(42,171,130,0.18)':'transparent',color:activeTab===tab.id?'white':'rgba(255,255,255,0.65)',border:'none',borderRight:activeTab===tab.id?'3px solid #2AAB82':'3px solid transparent',cursor:'pointer',textAlign:'left',fontWeight:activeTab===tab.id?'700':'400'}}
               onMouseOver={e=>{if(activeTab!==tab.id)e.currentTarget.style.background='rgba(255,255,255,0.08)';}}
               onMouseOut={e=>{if(activeTab!==tab.id)e.currentTarget.style.background='transparent';}}>
               <span style={{fontSize:'14px'}}>{tab.icon}</span>{tab.label}
-              {tab.id==='audit'&&untaggedCount>0&&(
-                <span style={{marginLeft:'auto',background:'#F59E0B',color:'white',fontSize:'10px',fontWeight:'700',padding:'2px 6px',borderRadius:'20px'}} title={untaggedCount+' untagged transactions'}>{untaggedLabel}</span>
-              )}
+              {tab.id==='dataaudit'&&untaggedCount>0&&<span style={{marginLeft:'auto',background:'#F59E0B',color:'white',fontSize:'10px',fontWeight:'700',padding:'2px 6px',borderRadius:'20px'}} title={untaggedCount+' untagged transactions'}>{untaggedLabel}</span>}
             </button>
           ))}
         </nav>
         <div style={{padding:'12px 14px',borderTop:'1px solid rgba(255,255,255,0.1)',display:'flex',flexDirection:'column',gap:'6px'}}>
-          {canManage&&<button onClick={()=>setShowUpload(true)}
-            style={{display:'flex',alignItems:'center',gap:'8px',background:'rgba(255,255,255,0.1)',border:'none',cursor:'pointer',color:'#93C5FD',padding:'9px 12px',borderRadius:'8px',fontSize:'12px',fontWeight:'600'}}
-            onMouseOver={e=>e.currentTarget.style.background='rgba(255,255,255,0.18)'}
-            onMouseOut={e=>e.currentTarget.style.background='rgba(255,255,255,0.1)'}>Import Data</button>}
-          {canManage&&<button onClick={()=>setShowTeamPanel(true)}
-            style={{display:'flex',alignItems:'center',gap:'8px',background:'rgba(255,255,255,0.06)',border:'none',cursor:'pointer',color:'#93C5FD',padding:'9px 12px',borderRadius:'8px',fontSize:'12px'}}
-            onMouseOver={e=>e.currentTarget.style.background='rgba(255,255,255,0.14)'}
-            onMouseOut={e=>e.currentTarget.style.background='rgba(255,255,255,0.06)'}>Manage Team</button>}
+          {canManage&&<button onClick={()=>setShowUpload(true)} style={{display:'flex',alignItems:'center',gap:'8px',background:'rgba(42,171,130,0.15)',border:'1px solid rgba(42,171,130,0.3)',cursor:'pointer',color:'rgba(255,255,255,0.85)',padding:'9px 12px',borderRadius:'8px',fontSize:'12px',fontWeight:'600'}} onMouseOver={e=>e.currentTarget.style.background='rgba(255,255,255,0.18)'} onMouseOut={e=>e.currentTarget.style.background='rgba(255,255,255,0.1)'}>Import Data</button>}
+          {canManage&&<button onClick={()=>setShowTeamPanel(true)} style={{display:'flex',alignItems:'center',gap:'8px',background:'rgba(255,255,255,0.06)',border:'none',cursor:'pointer',color:'#93C5FD',padding:'9px 12px',borderRadius:'8px',fontSize:'12px'}} onMouseOver={e=>e.currentTarget.style.background='rgba(255,255,255,0.14)'} onMouseOut={e=>e.currentTarget.style.background='rgba(255,255,255,0.06)'}>Manage Team</button>}
           <div style={{display:'flex',alignItems:'center',gap:'8px',padding:'4px 2px'}}>
             {user.photoURL&&<img src={user.photoURL} alt="" style={{width:'26px',height:'26px',borderRadius:'50%',flexShrink:0}}/>}
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:'11px',fontWeight:'600',color:'#E2E8F0',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{user.displayName||user.email}</div>
-              <div style={{fontSize:'10px',color:'rgba(147,197,253,0.6)'}}>{ROLES[userRole]||'Team Member'}</div>
-            </div>
-            <button onClick={()=>_auth.signOut()}
-              style={{background:'none',border:'1px solid rgba(255,255,255,0.15)',borderRadius:'5px',cursor:'pointer',color:'rgba(147,197,253,0.6)',padding:'3px 7px',fontSize:'10px',flexShrink:0}}
-              onMouseOver={e=>{e.currentTarget.style.color='white';e.currentTarget.style.borderColor='rgba(255,255,255,0.4)';}}
-              onMouseOut={e=>{e.currentTarget.style.color='rgba(147,197,253,0.6)';e.currentTarget.style.borderColor='rgba(255,255,255,0.15)';}}>
-              Sign out
-            </button>
+            <div style={{flex:1,minWidth:0}}><div style={{fontSize:'11px',fontWeight:'600',color:'#E2E8F0',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{user.displayName||user.email}</div><div style={{fontSize:'10px',color:'rgba(147,197,253,0.6)'}}>{ROLES[userRole]||'Team Member'}</div></div>
+            <button onClick={()=>_auth.signOut()} style={{background:'none',border:'1px solid rgba(255,255,255,0.15)',borderRadius:'5px',cursor:'pointer',color:'rgba(147,197,253,0.6)',padding:'3px 7px',fontSize:'10px',flexShrink:0}} onMouseOver={e=>{e.currentTarget.style.color='white';e.currentTarget.style.borderColor='rgba(255,255,255,0.4)';}} onMouseOut={e=>{e.currentTarget.style.color='rgba(147,197,253,0.6)';e.currentTarget.style.borderColor='rgba(255,255,255,0.15)';}}>Sign out</button>
           </div>
           <div style={{fontSize:'10px',color:'rgba(147,197,253,0.35)',paddingTop:'2px'}}>{transactions.length.toLocaleString()} txns · live sync 🟢</div>
         </div>
@@ -1613,21 +2013,15 @@ function App(){
           <h1 style={{fontSize:'15px',fontWeight:'700',color:'#1E293B',margin:0}}>{activeTabInfo.label}</h1>
           <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:'10px'}}>
             <span style={{fontSize:'11px',color:'#94A3B8'}}>FY2023-24 through FY2025-26 · Fund 94 · SACS</span>
-            {canManage&&<button onClick={()=>setShowUpload(true)}
-              style={{fontSize:'12px',border:'1px solid #E2E8F0',color:'#64748B',padding:'5px 10px',borderRadius:'7px',background:'white',cursor:'pointer',fontWeight:'600'}}
-              onMouseOver={e=>e.currentTarget.style.background='#F8FAFC'}
-              onMouseOut={e=>e.currentTarget.style.background='white'}>Import</button>}
+            {canManage&&<button onClick={()=>setShowUpload(true)} style={{fontSize:'12px',border:'1px solid #E2E8F0',color:'#64748B',padding:'5px 10px',borderRadius:'7px',background:'white',cursor:'pointer',fontWeight:'600'}} onMouseOver={e=>e.currentTarget.style.background='#F8FAFC'} onMouseOut={e=>e.currentTarget.style.background='white'}>Import</button>}
           </div>
         </div>
         <div style={{flex:1,overflowY:'auto',padding:'24px'}}>
-          {activeTab==='overview'   &&<OverviewTab   txns={transactions} todos={todos} setTodos={updTodos} auditTags={auditTags} userRole={userRole}/>}
-          {activeTab==='carryover'  &&<CarryoverTab  txns={transactions}/>}
-          {activeTab==='budget'     &&<BudgetTab     txns={transactions} amendments={amendments} setAmendments={updAmendments}/>}
-          {activeTab==='revenue'    &&<RevenueTab    txns={transactions} events={events} setEvents={updEvents} userRole={userRole}/>}
-          {activeTab==='ledger'     &&<LedgerTab     txns={transactions} enrichments={enrichments} auditTags={auditTags} onJumpToEnrich={id=>{setActiveTab('enrichment');setJumpToId(id);}}/>}
-          {activeTab==='enrichment' &&<EnrichmentTab txns={transactions} enrichments={enrichments} setEnrichments={updEnrichments} auditTags={auditTags} setAuditTags={updTags} jumpToId={jumpToId} clearJump={()=>setJumpToId(null)}/>}
-          {activeTab==='audit'      &&<AuditSummaryTab txns={transactions} enrichments={enrichments} auditTags={auditTags}/>}
-          {activeTab==='log'        &&<LogTab logs={activityLogs}/>}
+          {activeTab==='overview'  &&<OverviewTab    txns={transactions} todos={todos} setTodos={updTodos} auditTags={auditTags} userRole={userRole}/>}
+          {activeTab==='fiscal'    &&<FiscalHealthTab txns={transactions} amendments={amendments} setAmendments={updAmendments}/>}
+          {activeTab==='payments'  &&<PartnerPaymentsTab payments={payments} userRole={userRole}/>}
+          {activeTab==='dataaudit' &&<DataAuditTab   txns={transactions} enrichments={enrichments} setEnrichments={updEnrichments} auditTags={auditTags} setAuditTags={updTags} jumpToId={jumpToId} clearJump={()=>setJumpToId(null)} initialView={dataAuditView} onViewChange={setDataAuditView} onJumpToEnrich={jumpToEnrich}/>}
+          {activeTab==='log'       &&<LogTab logs={activityLogs}/>}
         </div>
       </div>
     </div>
