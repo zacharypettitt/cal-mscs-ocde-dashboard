@@ -1188,36 +1188,78 @@ function CarryoverTab({txns}){
 }
 
 // ── Upload Modal ──────────────────────────────────────────────────────────────
-function UploadModal({onClose,onImport,existingCount}){
+function UploadModal({onClose,onImport,existingCount,existingTxns}){
   const [mode,setMode]=useState('incremental');
   const [preview,setPreview]=useState(null);
   const [parsed,setParsed]=useState(null);
   const [error,setError]=useState('');
+  const [loading,setLoading]=useState(false);
+  const [showAllNew,setShowAllNew]=useState(false);
   const fileRef=useRef();
-  function handleFile(e){
-    const file=e.target.files[0];if(!file)return;setError('');
-    const reader=new FileReader();
-    reader.onload=ev=>{
-      try{
-        const rows=parseCSVtoTxns(ev.target.result);
-        if(rows.length===0){setError('No valid transactions found. Check the file format.');return;}
-        const accts=[...new Set(rows.map(r=>r.account))].filter(Boolean);
-        const dates=rows.map(r=>r.date).filter(Boolean).sort();
-        setParsed(rows);setPreview({count:rows.length,accts,min:dates[0],max:dates[dates.length-1],name:file.name});
-      }catch(e){setError('Could not parse file: '+e.message);}
-    };
-    reader.readAsText(file);
+
+  const existingIds=useMemo(()=>new Set((existingTxns||[]).map(t=>t.id)),[existingTxns]);
+
+  // Recompute what's "new" vs "already in database" whenever the parsed data
+  // or the selected mode changes, so switching modes updates the preview live.
+  const diff=useMemo(()=>{
+    if(!parsed) return null;
+    if(mode!=='incremental') return{newRows:parsed,alreadyExists:[]};
+    const newRows=parsed.filter(r=>!existingIds.has(r.id));
+    const alreadyExists=parsed.filter(r=>existingIds.has(r.id));
+    return{newRows,alreadyExists};
+  },[parsed,mode,existingIds]);
+
+  function readFileAsText(file){
+    return new Promise((resolve,reject)=>{
+      const reader=new FileReader();
+      reader.onload=ev=>resolve(ev.target.result);
+      reader.onerror=()=>reject(new Error(`Could not read ${file.name}`));
+      reader.readAsText(file);
+    });
   }
-  function confirm(){if(!parsed)return;onImport(parsed,mode);onClose();}
+
+  async function handleFiles(e){
+    const files=Array.from(e.target.files||[]);
+    if(files.length===0) return;
+    setError('');setLoading(true);setPreview(null);setParsed(null);setShowAllNew(false);
+    try{
+      const perFile=[];
+      let allRows=[];
+      for(const file of files){
+        const text=await readFileAsText(file);
+        const rows=parseCSVtoTxns(text);
+        perFile.push({name:file.name,count:rows.length});
+        allRows=allRows.concat(rows);
+      }
+      if(allRows.length===0){setError('No valid transactions found in the selected file(s). Check the format.');setLoading(false);return;}
+      const seen=new Set();const deduped=[];
+      allRows.forEach(r=>{if(!seen.has(r.id)){seen.add(r.id);deduped.push(r);}});
+      const accts=[...new Set(deduped.map(r=>r.account))].filter(Boolean).sort();
+      const dates=deduped.map(r=>r.date).filter(Boolean).sort();
+      setParsed(deduped);
+      setPreview({count:deduped.length,accts,min:dates[0],max:dates[dates.length-1],files:perFile,duplicatesSkipped:allRows.length-deduped.length});
+    }catch(err){
+      setError('Could not parse file(s): '+err.message);
+    }
+    setLoading(false);
+  }
+  function confirm(){
+    if(!parsed)return;
+    // For incremental mode, only the genuinely-new rows get written — matches
+    // what the preview below shows, so what you see is what gets committed.
+    const toSend=mode==='incremental'?(diff?diff.newRows:parsed):parsed;
+    onImport(toSend,mode);onClose();
+  }
   const modeBtn=(v,label,desc)=>(
     <button onClick={()=>setMode(v)} style={{textAlign:'left',padding:'14px',borderRadius:'10px',border:`2px solid ${mode===v?'#1D4ED8':'#E2E8F0'}`,background:mode===v?'#EFF6FF':'white',cursor:'pointer',width:'100%'}}>
       <div style={{fontWeight:'700',fontSize:'13px',color:mode===v?'#1D4ED8':'#334155'}}>{label}</div>
       <div style={{fontSize:'12px',color:'#64748B',marginTop:'4px'}}>{desc}</div>
     </button>
   );
+  const newRowsToShow=diff?(showAllNew?diff.newRows:diff.newRows.slice(0,15)):[];
   return(
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000}}>
-      <div style={{background:'white',borderRadius:'16px',width:'100%',maxWidth:'500px',margin:'0 20px',boxShadow:'0 25px 50px rgba(0,0,0,0.25)'}}>
+      <div style={{background:'white',borderRadius:'16px',width:'100%',maxWidth:'620px',margin:'0 20px',boxShadow:'0 25px 50px rgba(0,0,0,0.25)',maxHeight:'90vh',overflow:'auto'}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'18px 22px',borderBottom:'1px solid #E2E8F0'}}>
           <h3 style={{margin:0,fontSize:'16px',fontWeight:'700',color:'#1E293B'}}>Import Transactions</h3>
           <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',color:'#94A3B8',fontSize:'22px',lineHeight:1}} onMouseOver={e=>e.target.style.color='#64748B'} onMouseOut={e=>e.target.style.color='#94A3B8'}>×</button>
@@ -1225,33 +1267,85 @@ function UploadModal({onClose,onImport,existingCount}){
         <div style={{padding:'20px 22px',display:'flex',flexDirection:'column',gap:'16px'}}>
           <p style={{margin:0,fontSize:'13px',color:'#64748B'}}>Current database: <strong style={{color:'#1E293B'}}>{existingCount.toLocaleString()} transactions</strong></p>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
-            {modeBtn('incremental','Incremental','Add only new transactions. Use for monthly updates.')}
-            {modeBtn('replace','Full Replace','Replace entire dataset. Use to re-verify everything.')}
+            {modeBtn('incremental','Incremental','Add only new transactions (checks Firestore IDs). Use for monthly updates.')}
+            {modeBtn('replace','Full Replace','Replace entire Firestore dataset. Use to reload all CSVs.')}
           </div>
           <div onClick={()=>fileRef.current?.click()} style={{border:'2px dashed #CBD5E1',borderRadius:'12px',padding:'28px',textAlign:'center',cursor:'pointer'}} onMouseOver={e=>{e.currentTarget.style.borderColor='#3B82F6';e.currentTarget.style.background='#F0F9FF';}} onMouseOut={e=>{e.currentTarget.style.borderColor='#CBD5E1';e.currentTarget.style.background='transparent';}}>
             <div style={{fontSize:'24px',marginBottom:'6px'}}>📁</div>
-            <div style={{fontWeight:'600',color:'#475569'}}>Click to select a CSV file</div>
-            <div style={{fontSize:'12px',color:'#94A3B8',marginTop:'4px'}}>Same format as the original ledger exports</div>
-            <input ref={fileRef} type="file" accept=".csv" style={{display:'none'}} onChange={handleFile}/>
+            <div style={{fontWeight:'600',color:'#475569'}}>Click to select one or more CSV files</div>
+            <div style={{fontSize:'12px',color:'#94A3B8',marginTop:'4px'}}>Select all 5 account exports at once (0110028, 0110029, 0110030, 0110237, 0110238) — same format as the original ledger exports</div>
+            <input ref={fileRef} type="file" accept=".csv" multiple style={{display:'none'}} onChange={handleFiles}/>
           </div>
+          {loading&&<div style={{fontSize:'13px',color:'#64748B',textAlign:'center'}}>Parsing file(s)…</div>}
           {error&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'12px',fontSize:'13px',color:'#991B1B'}}>{error}</div>}
           {preview&&(
             <div style={{background:'#ECFDF5',border:'1px solid #A7F3D0',borderRadius:'12px',padding:'14px'}}>
-              <div style={{fontWeight:'700',color:'#065F46',marginBottom:'8px'}}>✅ File parsed successfully</div>
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'6px',fontSize:'13px',color:'#065F46'}}>
-                <div><strong>File:</strong> {preview.name}</div>
-                <div><strong>Transactions:</strong> {preview.count.toLocaleString()}</div>
+              <div style={{fontWeight:'700',color:'#065F46',marginBottom:'8px'}}>✅ {preview.files.length} file{preview.files.length!==1?'s':''} parsed successfully</div>
+              <div style={{display:'flex',flexDirection:'column',gap:'3px',marginBottom:'10px'}}>
+                {preview.files.map(f=>(
+                  <div key={f.name} style={{display:'flex',justifyContent:'space-between',fontSize:'12px',color:'#065F46'}}>
+                    <span>{f.name}</span><span style={{fontWeight:'600'}}>{f.count.toLocaleString()} rows</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'6px',fontSize:'13px',color:'#065F46',paddingTop:'8px',borderTop:'1px solid #A7F3D0'}}>
+                <div><strong>Combined total parsed:</strong> {preview.count.toLocaleString()}</div>
                 <div><strong>Accounts:</strong> {preview.accts.join(', ')}</div>
                 <div><strong>Dates:</strong> {preview.min} – {preview.max}</div>
+                {preview.duplicatesSkipped>0&&<div><strong>Duplicates skipped:</strong> {preview.duplicatesSkipped}</div>}
               </div>
-              {mode==='replace'&&<div style={{marginTop:'8px',fontSize:'12px',color:'#991B1B',fontWeight:'700'}}>⚠ This will replace all {existingCount.toLocaleString()} existing transactions.</div>}
+              {mode==='replace'&&<div style={{marginTop:'8px',fontSize:'12px',color:'#991B1B',fontWeight:'700'}}>⚠ This will replace all {existingCount.toLocaleString()} existing transactions with these {preview.count.toLocaleString()}.</div>}
+            </div>
+          )}
+
+          {/* Incremental review step — shows exactly what's about to be added before committing */}
+          {mode==='incremental'&&diff&&(
+            <div style={{background:'white',border:'1px solid #E2E8F0',borderRadius:'12px',padding:'14px'}}>
+              <div style={{display:'flex',gap:'16px',marginBottom:'10px'}}>
+                <div><span style={{fontSize:'20px',fontWeight:'700',color:'#1D4ED8'}}>{diff.newRows.length.toLocaleString()}</span><span style={{fontSize:'12px',color:'#64748B',marginLeft:'6px'}}>new — will be added</span></div>
+                <div><span style={{fontSize:'20px',fontWeight:'700',color:'#94A3B8'}}>{diff.alreadyExists.length.toLocaleString()}</span><span style={{fontSize:'12px',color:'#64748B',marginLeft:'6px'}}>already in database — will be skipped</span></div>
+              </div>
+              {diff.newRows.length===0?(
+                <div style={{fontSize:'13px',color:'#94A3B8',fontStyle:'italic'}}>Nothing new to add — every parsed row already exists in Firestore.</div>
+              ):(
+                <>
+                  <div style={{fontSize:'11px',fontWeight:'700',color:'#64748B',letterSpacing:'0.05em',textTransform:'uppercase',marginBottom:'8px'}}>Preview of new transactions</div>
+                  <div style={{maxHeight:'260px',overflowY:'auto',border:'1px solid #F1F5F9',borderRadius:'8px'}}>
+                    <table style={{width:'100%',borderCollapse:'collapse',fontSize:'12px'}}>
+                      <thead style={{position:'sticky',top:0,background:'#F8FAFC'}}>
+                        <tr>
+                          <th style={{padding:'6px 10px',textAlign:'left',color:'#64748B',fontWeight:'700'}}>Date</th>
+                          <th style={{padding:'6px 10px',textAlign:'left',color:'#64748B',fontWeight:'700'}}>Account</th>
+                          <th style={{padding:'6px 10px',textAlign:'left',color:'#64748B',fontWeight:'700'}}>Description</th>
+                          <th style={{padding:'6px 10px',textAlign:'right',color:'#64748B',fontWeight:'700'}}>Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {newRowsToShow.map(r=>(
+                          <tr key={r.id} style={{borderTop:'1px solid #F8FAFC'}}>
+                            <td style={{padding:'6px 10px',whiteSpace:'nowrap',color:'#334155'}}>{r.date}</td>
+                            <td style={{padding:'6px 10px',fontFamily:'monospace',color:'#475569'}}>{r.account}</td>
+                            <td style={{padding:'6px 10px',color:'#334155',maxWidth:'220px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.desc}</td>
+                            <td style={{padding:'6px 10px',textAlign:'right',fontWeight:'600',color:r.amt<0?'#DC2626':'#1E293B'}}>{fmt(r.amt)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {diff.newRows.length>15&&(
+                    <button onClick={()=>setShowAllNew(v=>!v)} style={{background:'none',border:'none',color:'#1D4ED8',fontSize:'12px',fontWeight:'600',cursor:'pointer',padding:'8px 0 0'}}>
+                      {showAllNew?'Show fewer':`Show all ${diff.newRows.length.toLocaleString()} new rows`}
+                    </button>
+                  )}
+                </>
+              )}
             </div>
           )}
         </div>
         <div style={{display:'flex',gap:'10px',padding:'16px 22px',borderTop:'1px solid #E2E8F0',justifyContent:'flex-end'}}>
           <button onClick={onClose} style={{padding:'8px 18px',borderRadius:'8px',border:'1px solid #E2E8F0',background:'white',cursor:'pointer',color:'#64748B',fontWeight:'600',fontSize:'13px'}}>Cancel</button>
-          <button onClick={confirm} disabled={!parsed} style={{padding:'8px 20px',borderRadius:'8px',border:'none',background:parsed?'#1D4ED8':'#E2E8F0',color:parsed?'white':'#94A3B8',cursor:parsed?'pointer':'not-allowed',fontWeight:'700',fontSize:'13px'}}>
-            {mode==='incremental'?'Add New Transactions':'Replace All Data'}
+          <button onClick={confirm} disabled={!parsed||(mode==='incremental'&&diff&&diff.newRows.length===0)} style={{padding:'8px 20px',borderRadius:'8px',border:'none',background:parsed&&!(mode==='incremental'&&diff&&diff.newRows.length===0)?'#1D4ED8':'#E2E8F0',color:parsed&&!(mode==='incremental'&&diff&&diff.newRows.length===0)?'white':'#94A3B8',cursor:parsed&&!(mode==='incremental'&&diff&&diff.newRows.length===0)?'pointer':'not-allowed',fontWeight:'700',fontSize:'13px'}}>
+            {mode==='incremental'?(diff?`Add ${diff.newRows.length.toLocaleString()} New Transactions`:'Add New Transactions'):'Replace All Data'}
           </button>
         </div>
       </div>
@@ -2054,7 +2148,7 @@ function App(){
 
   return(
     <div style={{display:'flex',height:'100vh',background:'#F1F5F9',fontFamily:'system-ui,-apple-system,sans-serif',overflow:'hidden'}}>
-      {showUpload&&<UploadModal onClose={()=>setShowUpload(false)} onImport={handleImport} existingCount={transactions.length}/>}
+      {showUpload&&<UploadModal onClose={()=>setShowUpload(false)} onImport={handleImport} existingCount={transactions.length} existingTxns={transactions}/>}
       {showTeamPanel&&<TeamPanel currentUid={user.uid} currentRole={userRole} onClose={()=>setShowTeamPanel(false)}/>}
 
       <div style={{width:'220px',flexShrink:0,display:'flex',flexDirection:'column',background:'#1A6B7A'}}>
