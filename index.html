@@ -59,6 +59,9 @@ function saveEventHistory(action,snapshot){
 }
 
 const FS = {
+  payment:       (id,data) => _db.collection('payments').doc(id).set(data).catch(e=>{console.error(e);throw e;}),
+  paymentUpdate: (id,data) => _db.collection('payments').doc(id).update(data).catch(e=>{console.error(e);throw e;}),
+  paymentDelete: (id)      => _db.collection('payments').doc(id).delete().catch(e=>{console.error(e);throw e;}),
   todos:       (items) => _col('todos').set({items}).catch(console.error),
   events:      (items) => _col('events').set({items}).catch(console.error),
   amendments:  (items) => _col('amendments').set({items}).catch(console.error),
@@ -1547,6 +1550,7 @@ function PartnerPaymentsTab({payments,userRole}){
   const [statusEditId,setStatusEditId]=useState(null);
   const [statusForm,setStatusForm]=useState({status:'',note:''});
   const [form,setForm]=useState({...EMPTY_PAY,fyYear:currentFY()});
+  const [formError,setFormError]=useState('');
 
   const filtered=useMemo(()=>{
     let r=payments;
@@ -1565,21 +1569,31 @@ function PartnerPaymentsTab({payments,userRole}){
   const paidAmt=payments.filter(p=>p.status==='paid').reduce((s,p)=>s+(parseFloat(p.paidAmount||p.amount)||0),0);
 
   async function handleAdd(){
-    if(!form.recipient.trim()||!form.amount) return;
-    const u=_auth.currentUser;if(!u) return;
+    setFormError('');
+    if(!form.recipient.trim()||!form.amount){setFormError('Recipient name and expected amount are required.');return;}
+    const u=_auth.currentUser;if(!u){setFormError('You are not signed in.');return;}
     const id='p'+Date.now();const now=new Date().toISOString().slice(0,10);
-    await FS.payment(id,{...form,id,amount:parseFloat(form.amount)||0,paidAmount:parseFloat(form.paidAmount)||0,status:'draft',
-      coeReimbursement:form.fundingSource==='coe'?'not_invoiced':null,
-      statusHistory:[{status:'draft',note:'Payment record created',updatedBy:u.displayName||u.email,updatedAt:now}],
-      notes:[],createdAt:now,createdBy:u.displayName||u.email,createdByEmail:u.email});
-    logActivity('payment_added',`Added payment: "${form.recipient}" — ${fmt(parseFloat(form.amount)||0)}`,{type:form.paymentType,source:form.fundingSource});
-    setShowAdd(false);setForm({...EMPTY_PAY,fyYear:currentFY()});
+    try{
+      await FS.payment(id,{...form,id,amount:parseFloat(form.amount)||0,paidAmount:parseFloat(form.paidAmount)||0,status:'draft',
+        coeReimbursement:form.fundingSource==='coe'?'not_invoiced':null,
+        statusHistory:[{status:'draft',note:'Payment record created',updatedBy:u.displayName||u.email,updatedAt:now}],
+        notes:[],createdAt:now,createdBy:u.displayName||u.email,createdByEmail:u.email});
+      logActivity('payment_added',`Added payment: "${form.recipient}" — ${fmt(parseFloat(form.amount)||0)}`,{type:form.paymentType,source:form.fundingSource});
+      setShowAdd(false);setForm({...EMPTY_PAY,fyYear:currentFY()});
+    }catch(err){
+      setFormError('Could not save payment: '+(err&&err.message?err.message:'unknown error')+'. This is usually a permissions issue — confirm your role in Manage Team.');
+    }
   }
   async function handleUpdate(){
-    if(!form.recipient.trim()) return;
-    await FS.paymentUpdate(editId,{recipient:form.recipient,recipientType:form.recipientType,paymentType:form.paymentType,description:form.description,amount:parseFloat(form.amount)||0,fundingSource:form.fundingSource,fyYear:form.fyYear,agreementRef:form.agreementRef,expectedDate:form.expectedDate,txnId:form.txnId||'',paidDate:form.paidDate||'',paidAmount:parseFloat(form.paidAmount)||0});
-    logActivity('payment_edited',`Edited payment: "${form.recipient}"`,{id:editId});
-    setEditId(null);
+    setFormError('');
+    if(!form.recipient.trim()){setFormError('Recipient name is required.');return;}
+    try{
+      await FS.paymentUpdate(editId,{recipient:form.recipient,recipientType:form.recipientType,paymentType:form.paymentType,description:form.description,amount:parseFloat(form.amount)||0,fundingSource:form.fundingSource,fyYear:form.fyYear,agreementRef:form.agreementRef,expectedDate:form.expectedDate,txnId:form.txnId||'',paidDate:form.paidDate||'',paidAmount:parseFloat(form.paidAmount)||0});
+      logActivity('payment_edited',`Edited payment: "${form.recipient}"`,{id:editId});
+      setEditId(null);
+    }catch(err){
+      setFormError('Could not save changes: '+(err&&err.message?err.message:'unknown error')+'. This is usually a permissions issue — confirm your role in Manage Team.');
+    }
   }
   async function handleDelete(p){
     if(!window.confirm(`Delete payment for "${p.recipient}"? This cannot be undone.`)) return;
@@ -1660,13 +1674,14 @@ function PartnerPaymentsTab({payments,userRole}){
         <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} style={{...inp,flex:1,minWidth:'140px'}}><option value="">All Statuses</option>{STATUS_ORDER.map(s=><option key={s} value={s}>{PAY_STATUSES[s].label}</option>)}</select>
         <select value={filterType} onChange={e=>setFilterType(e.target.value)} style={{...inp,flex:1,minWidth:'110px'}}><option value="">All Types</option>{PAY_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select>
         <select value={filterFY} onChange={e=>setFilterFY(e.target.value)} style={{...inp,flex:1,minWidth:'100px'}}><option value="">All Years</option>{FY_LIST.map(f=><option key={f} value={f}>{f}</option>)}</select>
-        {canManage&&<button onClick={()=>{setShowAdd(true);setEditId(null);setForm({...EMPTY_PAY,fyYear:currentFY()});}} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontWeight:'600',cursor:'pointer',whiteSpace:'nowrap'}}>+ Add Payment</button>}
+        {canManage&&<button onClick={()=>{setShowAdd(true);setEditId(null);setFormError('');setForm({...EMPTY_PAY,fyYear:currentFY()});}} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontWeight:'600',cursor:'pointer',whiteSpace:'nowrap'}}>+ Add Payment</button>}
       </div>
 
       {/* Add form */}
       {showAdd&&canManage&&(
         <div style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
           <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>New Payment Record</div>
+          {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
           <PayForm form={form} setForm={setForm} onSave={handleAdd} onCancel={()=>setShowAdd(false)} saveLabel="Create Payment"/>
         </div>
       )}
@@ -1688,6 +1703,7 @@ function PartnerPaymentsTab({payments,userRole}){
           if(isEditing) return(
             <div key={p.id} style={{background:'#EFF6FF',border:'2px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
               <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>Editing: {p.recipient}</div>
+              {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
               <PayForm form={form} setForm={setForm} onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes"/>
             </div>
           );
@@ -1827,7 +1843,7 @@ function PartnerPaymentsTab({payments,userRole}){
                   {/* Card actions */}
                   {canManage&&(
                     <div style={{display:'flex',gap:'8px',paddingTop:'4px',borderTop:'1px solid #F1F5F9'}}>
-                      <button onClick={(e)=>{e.stopPropagation();startEdit(p);setExpandedId(null);}} style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'7px',padding:'6px 12px',cursor:'pointer',color:'#1D4ED8',fontSize:'12px',fontWeight:'600'}}>Edit Payment</button>
+                      <button onClick={(e)=>{e.stopPropagation();startEdit(p);setExpandedId(null);setFormError('');}} style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'7px',padding:'6px 12px',cursor:'pointer',color:'#1D4ED8',fontSize:'12px',fontWeight:'600'}}>Edit Payment</button>
                       <button onClick={(e)=>{e.stopPropagation();handleDelete(p);}} style={{background:'none',border:'1px solid #FECACA',borderRadius:'7px',padding:'6px 12px',cursor:'pointer',color:'#991B1B',fontSize:'12px'}}>Delete</button>
                     </div>
                   )}
