@@ -226,12 +226,12 @@ const PAYMENTS=[
   {n:1,alloc:"First", fy:"FY23/24",amt:133941.00,trigger:"100% upfront",status:"received"},
   {n:2,alloc:"Second",fy:"FY24/25",amt:66970.50, trigger:"75% of Pmt 1 spent ($100,456)",status:"received"},
   {n:3,alloc:"Second",fy:"FY24/25",amt:33485.25, trigger:"75% of Pmt 2 spent ($50,228)",status:"received"},
-  {n:4,alloc:"Second",fy:"FY24/25",amt:33485.25, trigger:"75% of Pmt 3 spent ($25,114)",status:"ready"},
+  {n:4,alloc:"Second",fy:"FY24/25",amt:33485.25, trigger:"75% of Pmt 3 spent ($25,114)",status:"received"},
   {n:5,alloc:"Third", fy:"FY25/26",amt:66970.50, trigger:"75% of Pmt 4 spent ($25,114)",status:"ready"},
   {n:6,alloc:"Third", fy:"FY25/26",amt:33485.25, trigger:"75% of Pmt 5 spent ($50,228)",status:"ready"},
-  {n:7,alloc:"Third", fy:"FY25/26",amt:33485.25, trigger:"75% of Pmt 6 spent ($25,114)",status:"pending"},
-  {n:8,alloc:"Fourth",fy:"FY26/27",amt:50228.50, trigger:"75% of Pmt 7 spent ($25,114)",status:"future"},
-  {n:9,alloc:"Fourth",fy:"FY26/27",amt:50228.50, trigger:"Final expense report approved",status:"future"},
+  {n:7,alloc:"Third", fy:"FY25/26",amt:33485.25, trigger:"75% of Pmt 6 spent ($25,114)",status:"ready"},
+  {n:8,alloc:"Fourth",fy:"FY26/27",amt:50228.50, trigger:"75% of Pmt 7 spent ($25,114)",status:"ready"},
+  {n:9,alloc:"Fourth",fy:"FY26/27",amt:50228.50, trigger:"Final expense report approved",status:"ready"},
 ];
 
 // ── Shared fiscal calculations — single source of truth for carryover ────────
@@ -394,7 +394,7 @@ function SortIcon({col,sortCol,sortDir}){
 
 // ── Overview Tab ─────────────────────────────────────────────────────────────
 // ── Overview Tab ─────────────────────────────────────────────────────────────
-function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMembers,currentUid}){
+function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMembers,currentUid,onJumpToAllocation}){
   const [showAdd,setShowAdd]=useState(false);
   const [showDone,setShowDone]=useState(false);
   const [editId,setEditId]=useState(null);
@@ -464,6 +464,12 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMember
 
   const readyAmt=PAYMENTS.filter(p=>p.status==='ready').reduce((s,p)=>s+p.amt,0);
   const readyCount=PAYMENTS.filter(p=>p.status==='ready').length;
+
+  // Live cross-check against Allocation Schedule's recorded statuses — surfaces
+  // here too so a stale status doesn't go unnoticed just because nobody happened
+  // to click into Fiscal Health after an import.
+  const reconciled=useMemo(()=>computePaymentReconciliation(txns),[txns]);
+  const paymentMismatchCount=reconciled.filter(p=>p.mismatch).length;
 
   const owedPayments=useMemo(()=>(payments||[]).filter(p=>p.fundingSource==='coe'&&p.status==='paid'&&p.coeReimbursement==='not_invoiced'),[payments]);
   const owedAmt=owedPayments.reduce((s,p)=>s+(parseFloat(p.paidAmount||p.amount)||0),0);
@@ -609,6 +615,15 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMember
           <div style={{fontSize:'22px',fontWeight:'700'}}>{fmt(readyAmt)}</div>
           <div style={{fontSize:'11px',opacity:.75,marginTop:'3px'}}>{readyCount} payment{readyCount!==1?'s':''} · spending triggers met</div>
         </div>}
+        {paymentMismatchCount>0&&(
+          <button onClick={onJumpToAllocation} style={{background:'#FFFBEB',border:'2px solid #FDE68A',borderRadius:'12px',padding:'14px 16px',textAlign:'left',cursor:'pointer',display:'flex',gap:'10px',alignItems:'flex-start'}}>
+            <span style={{fontSize:'18px',flexShrink:0}}>⚠️</span>
+            <div>
+              <div style={{fontWeight:'700',color:'#92400E',fontSize:'13px'}}>{paymentMismatchCount} payment status{paymentMismatchCount!==1?'es':''} may be out of date</div>
+              <div style={{fontSize:'11px',color:'#78350F',marginTop:'3px',lineHeight:'1.4'}}>Recent transactions suggest the Allocation Schedule needs review. Click to check →</div>
+            </div>
+          </button>
+        )}
         {owedAmt>0&&<div style={{background:'#92400E',borderRadius:'12px',padding:'16px',color:'white'}}>
           <div style={{fontSize:'10px',fontWeight:'700',opacity:.85,letterSpacing:'0.06em',marginBottom:'4px'}}>OWED BY COE — PARTNER REIMBURSEMENTS</div>
           <div style={{fontSize:'22px',fontWeight:'700'}}>{fmt(owedAmt)}</div>
@@ -1498,9 +1513,11 @@ function AllocationView({txns}){
 }
 
 // ── Fiscal Health Tab (Year Detail + Multi-Year + Allocation Schedule) ─────────
-function FiscalHealthTab({txns,amendments,setAmendments}){
-  const [view,setView]=useState('year');
-  const tabBtn=(k,l)=><button onClick={()=>setView(k)} style={{padding:'7px 16px',borderRadius:'8px',fontSize:'13px',fontWeight:'600',border:'1px solid',cursor:'pointer',background:view===k?'#1D4ED8':'white',color:view===k?'white':'#64748B',borderColor:view===k?'#1D4ED8':'#E2E8F0'}}>{l}</button>;
+function FiscalHealthTab({txns,amendments,setAmendments,initialView,onViewChange}){
+  const [view,setView]=useState(initialView||'year');
+  useEffect(()=>{if(initialView&&initialView!==view)setView(initialView);},[initialView]);
+  function setViewAndNotify(v){setView(v);if(onViewChange)onViewChange(v);}
+  const tabBtn=(k,l)=><button onClick={()=>setViewAndNotify(k)} style={{padding:'7px 16px',borderRadius:'8px',fontSize:'13px',fontWeight:'600',border:'1px solid',cursor:'pointer',background:view===k?'#1D4ED8':'white',color:view===k?'white':'#64748B',borderColor:view===k?'#1D4ED8':'#E2E8F0'}}>{l}</button>;
   return(
     <div style={{display:'flex',flexDirection:'column',gap:'18px'}}>
       <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
@@ -2061,6 +2078,7 @@ function App(){
   const [activeTab,setActiveTab]=useState('overview');
   const [jumpToId,setJumpToId]=useState(null);
   const [dataAuditView,setDataAuditView]=useState('ledger');
+  const [fiscalView,setFiscalView]=useState('year');
   const [showUpload,setShowUpload]=useState(false);
   const enrTimer=useRef(null);
 
@@ -2128,6 +2146,10 @@ function App(){
     setDataAuditView('enrichment');
     setJumpToId(id);
   }
+  function jumpToAllocation(){
+    setActiveTab('fiscal');
+    setFiscalView('allocation');
+  }
 
   const allowedTabIds=ROLE_TAB_ACCESS[userRole];
   const visibleTabs=allowedTabIds?TABS.filter(t=>allowedTabIds.includes(t.id)):TABS;
@@ -2192,8 +2214,8 @@ function App(){
           </div>
         </div>
         <div style={{flex:1,overflowY:'auto',padding:'24px'}}>
-          {activeTab==='overview'  &&<OverviewTab    txns={transactions} todos={todos} setTodos={updTodos} auditTags={auditTags} userRole={userRole} payments={payments} teamMembers={teamMembers} currentUid={user.uid}/>}
-          {activeTab==='fiscal'    &&<FiscalHealthTab txns={transactions} amendments={amendments} setAmendments={updAmendments}/>}
+          {activeTab==='overview'  &&<OverviewTab    txns={transactions} todos={todos} setTodos={updTodos} auditTags={auditTags} userRole={userRole} payments={payments} teamMembers={teamMembers} currentUid={user.uid} onJumpToAllocation={jumpToAllocation}/>}
+          {activeTab==='fiscal'    &&<FiscalHealthTab txns={transactions} amendments={amendments} setAmendments={updAmendments} initialView={fiscalView} onViewChange={setFiscalView}/>}
           {activeTab==='payments'  &&<PartnerPaymentsTab payments={payments} userRole={userRole}/>}
           {activeTab==='dataaudit' &&<DataAuditTab   txns={transactions} enrichments={enrichments} setEnrichments={updEnrichments} auditTags={auditTags} setAuditTags={updTags} jumpToId={jumpToId} clearJump={()=>setJumpToId(null)} initialView={dataAuditView} onViewChange={setDataAuditView} onJumpToEnrich={jumpToEnrich}/>}
           {activeTab==='log'       &&<LogTab logs={activityLogs}/>}
