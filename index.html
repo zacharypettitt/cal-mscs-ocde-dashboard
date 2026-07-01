@@ -63,7 +63,6 @@ const FS = {
   paymentUpdate: (id,data) => _db.collection('payments').doc(id).update(data).catch(e=>{console.error(e);throw e;}),
   paymentDelete: (id)      => _db.collection('payments').doc(id).delete().catch(e=>{console.error(e);throw e;}),
   todos:       (items) => _col('todos').set({items}).catch(console.error),
-  events:      (items) => _col('events').set({items}).catch(console.error),
   amendments:  (items) => _col('amendments').set({items}).catch(console.error),
   tags:        (data)  => _col('auditTags').set({data}).catch(console.error),
   enr:         (data)  => _col('enrichments').set({data}).catch(console.error),
@@ -216,6 +215,13 @@ const BUDGET={
   ]},
 };
 
+// Displayed "Total contract (5 yrs)" figure is kept as a fixed, cited number
+// (matches the executed grant agreement) rather than auto-derived, per
+// decision to keep it hardcoded but validated against BUDGET on every render.
+const CONTRACT_TOTAL_DISPLAY=502280;
+const BUDGET_TOTAL_CONTRACT=Object.values(BUDGET).reduce((s,b)=>s+(b.contract||0),0);
+const CONTRACT_TOTAL_MATCHES=Math.abs(CONTRACT_TOTAL_DISPLAY-BUDGET_TOTAL_CONTRACT)<0.01;
+
 const PAYMENTS=[
   {n:1,alloc:"First", fy:"FY23/24",amt:133941.00,trigger:"100% upfront",status:"received"},
   {n:2,alloc:"Second",fy:"FY24/25",amt:66970.50, trigger:"75% of Pmt 1 spent ($100,456)",status:"received"},
@@ -227,6 +233,72 @@ const PAYMENTS=[
   {n:8,alloc:"Fourth",fy:"FY26/27",amt:50228.50, trigger:"75% of Pmt 7 spent ($25,114)",status:"future"},
   {n:9,alloc:"Fourth",fy:"FY26/27",amt:50228.50, trigger:"Final expense report approved",status:"future"},
 ];
+
+// ── Shared fiscal calculations — single source of truth for carryover ────────
+// Chains contract + carryover forward year over year using ONLY BUDGET.contract
+// (the firm, planned contract amount) and actual transaction data (0110029 +
+// 0110030). Both Overview and the Multi-Year Carryover view call this same
+// function so they can never drift apart again.
+function computeFiscalChain(txns){
+  const actualByFY={};
+  txns.forEach(t=>{
+    if(t.account==='0110029'||t.account==='0110030'){
+      actualByFY[t.fy]=(actualByFY[t.fy]||0)+t.amt;
+    }
+  });
+  const nowFY=currentFY();
+  let carryIn=0;
+  return FY_LIST.map(fy=>{
+    const b=BUDGET[fy]||{contract:0};
+    const contract=b.contract||0;
+    const available=contract+carryIn;
+    const actual=actualByFY[fy]||0;
+    const carryOut=available-actual;
+    const row={fy,contract,carryoverIn:carryIn,available,actual,carryoverOut:carryOut,
+      isPast:fy<nowFY,isCurrent:fy===nowFY,isFuture:fy>nowFY};
+    carryIn=carryOut;
+    return row;
+  });
+}
+
+// COE Reimbursement net position — tracked separately from the primary grant
+// contract on purpose. This is pass-through reimbursement money (0110237
+// revenue vs 0110238 expense), not CDE contract funds, so it is NOT folded
+// into the primary carryover chain above. It's a rolling cumulative balance
+// (not reset by fiscal year) since any surplus simply sits in the account.
+function computeCoeNetPosition(txns){
+  const rev=txns.filter(t=>t.account==='0110237'&&t.sacs_group==='8xxx').reduce((s,t)=>s+t.amt,0);
+  const exp=txns.filter(t=>t.account==='0110238').reduce((s,t)=>s+t.amt,0);
+  return{rev,exp,net:rev-exp};
+}
+
+// ── Payment trigger auto-detection ────────────────────────────────────────────
+// Each trigger threshold ($ amount in parens in PAYMENTS[].trigger) represents
+// 75% of the PRIOR payment's amount. We parse those out and compare against
+// real cumulative primary-allocation spend (0110029+0110030) and real
+// cumulative cash received (0110028, AR/CR transactions only — JE entries are
+// accounting accruals, not real cash) to auto-detect status.
+// NOTE: we deliberately do NOT silently overwrite the manually-recorded status
+// on PAYMENTS — real-world cash timing (partial deposits, misposted entries,
+// combined payments) can't always be reconstructed perfectly from ledger sums
+// alone. Instead we compute a live estimate and flag it wherever it disagrees
+// with the recorded status, so a human can confirm rather than auto-trusting
+// a formula on compliance-sensitive figures.
+function computePaymentReconciliation(txns){
+  const cashReceived=txns.filter(t=>t.account==='0110028'&&t.sacs_group==='8xxx'&&(t.type==='AR'||t.type==='CR')).reduce((s,t)=>s+t.amt,0);
+  const primarySpend=txns.filter(t=>t.account==='0110029'||t.account==='0110030').reduce((s,t)=>s+t.amt,0);
+  let cumPayments=0,cumTrigger=0;
+  return PAYMENTS.map((p,i)=>{
+    cumPayments+=p.amt;
+    const m=p.trigger.match(/\$([\d,]+)/);
+    const triggerAmt=m?parseFloat(m[1].replace(/,/g,'')):0;
+    if(i>0) cumTrigger+=triggerAmt;
+    const cashCovers=cashReceived>=cumPayments;
+    const triggerMet=primarySpend>=cumTrigger;
+    const estimatedStatus=cashCovers?'received':triggerMet?'ready':'pending';
+    return{...p,cumPayments,cumTrigger,estimatedStatus,mismatch:estimatedStatus!==p.status&&!(estimatedStatus==='ready'&&p.status==='future')&&!(estimatedStatus==='pending'&&p.status==='future')};
+  });
+}
 
 const AUDIT_TAGS=[
   {id:"pending_reimb",label:"Pending Reimbursement",color:"#D97706",bg:"#FEF3C7"},
@@ -254,7 +326,6 @@ const INITIAL_TODOS=[
   {id:"t6",title:"Invoice COE partners for FY25/26 reimbursements",body:"Review services provided to San Joaquin (Science), Santa Barbara (Math), and Monterey (CS) COEs and ensure all have been invoiced.",cat:"followup",priority:"medium",done:false,createdAt:"2026-06-25"},
 ];
 
-const COE_MAP={Science:"San Joaquin",Math:"Santa Barbara","Computer Science":"Monterey"};
 const FY_LIST=["FY23/24","FY24/25","FY25/26","FY26/27"];
 const SACS_OPTS=[["","All SACS"],["1000s","1000s — Cert. Salaries"],["2000s","2000s — Class. Salaries"],["3000s","3000s — Benefits"],["4000s","4000s — Books & Supplies"],["5000s","5000s — Services"],["5200s","5200s — Travel & Conf."],["7000s","7000s — Indirect"],["8xxx","8xxx — Revenue"],["9xxx","9xxx — Bal. Sheet"]];
 
@@ -381,10 +452,15 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMember
   const fy=byFY[activeFY]||{};
   const totalExp1=Object.values(byFY).reduce((s,f)=>s+(f.exp1||0),0);
 
-  const curBudget=BUDGET[activeFY]||{};
-  const curContract=(curBudget.contract||0)+(curBudget.carryover||0);
-  const curSpentThisYear=fy.exp1||0;
+  // Single source of truth for carryover — same chain used by Multi-Year tab
+  const fiscalChain=useMemo(()=>computeFiscalChain(txns),[txns]);
+  const curRow=fiscalChain.find(r=>r.fy===activeFY)||{available:0,actual:0};
+  const curContract=curRow.available;
+  const curSpentThisYear=curRow.actual;
   const curUnspent=curContract-curSpentThisYear;
+
+  // COE Reimbursement net position — tracked separately, not blended into primary carryover
+  const coeNet=useMemo(()=>computeCoeNetPosition(txns),[txns]);
 
   const readyAmt=PAYMENTS.filter(p=>p.status==='ready').reduce((s,p)=>s+p.amt,0);
   const readyCount=PAYMENTS.filter(p=>p.status==='ready').length;
@@ -397,6 +473,7 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMember
     const status=f<activeFY?'Complete':f===activeFY?'Active':'Upcoming';
     const dot=f<activeFY?'#93C5FD':f===activeFY?'#34D399':'#D1D5DB';
     return{fy:f,status,dot};
+
   });
 
   const inpS={border:'1px solid #E2E8F0',borderRadius:'7px',padding:'7px 10px',fontSize:'13px'};
@@ -539,15 +616,25 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMember
         </div>}
         <div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',padding:'14px'}}>
           <div style={{fontSize:'10px',fontWeight:'700',color:'#64748B',letterSpacing:'0.06em',marginBottom:'10px'}}>PRIMARY ALLOCATION — {activeFY}</div>
-          {[['Total contract (5 yrs)','$502,280'],['Spent to date',fmt(totalExp1)],[`${activeFY} budget available`,fmt(curContract)],[`${activeFY} spent`,fmt(curSpentThisYear)],['Unspent this year',fmt(curUnspent)]].map(([l,v],i)=>(
+          {[['Total contract (5 yrs)',fmt(CONTRACT_TOTAL_DISPLAY)],['Spent to date',fmt(totalExp1)],[`${activeFY} budget available`,fmt(curContract)],[`${activeFY} spent`,fmt(curSpentThisYear)],['Unspent this year',fmt(curUnspent)]].map(([l,v],i)=>(
             <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'3px 0',borderTop:i>0?'1px solid #F8FAFC':'none',fontSize:'12px'}}><span style={{color:'#64748B'}}>{l}</span><span style={{fontWeight:i===4?'700':'500',color:i===4?(curUnspent<0?'#DC2626':'#D97706'):'#1E293B'}}>{v}</span></div>
           ))}
+          {CONTRACT_TOTAL_MATCHES?(
+            <div style={{fontSize:'10px',color:'#059669',marginTop:'6px'}}>✓ Matches sum of BUDGET contract amounts</div>
+          ):(
+            <div style={{fontSize:'10px',color:'#D97706',marginTop:'6px'}}>⚠ BUDGET totals {fmt(BUDGET_TOTAL_CONTRACT)} — differs from displayed total, review needed</div>
+          )}
         </div>
         <div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',padding:'14px'}}>
           <div style={{fontSize:'10px',fontWeight:'700',color:'#64748B',letterSpacing:'0.06em',marginBottom:'10px'}}>COE REIMBURSEMENT ({activeFY})</div>
           {[['Revenue received',fmt(fy.rev2||0)],['Expenses paid out',fmt(fy.exp2||0)],['Net balance',fmt((fy.rev2||0)-(fy.exp2||0))]].map(([l,v],i)=>(
             <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'3px 0',borderTop:i>0?'1px solid #F8FAFC':'none',fontSize:'12px'}}><span style={{color:'#64748B'}}>{l}</span><span style={{fontWeight:i===2?'700':'500',color:i===2?((fy.rev2||0)-(fy.exp2||0)>=0?'#059669':'#DC2626'):'#1E293B'}}>{v}</span></div>
           ))}
+          <div style={{display:'flex',justifyContent:'space-between',padding:'7px 0 2px',marginTop:'4px',borderTop:'1px dashed #E2E8F0',fontSize:'11px'}}>
+            <span style={{color:'#94A3B8'}}>Cumulative net position (all years)</span>
+            <span style={{fontWeight:'700',color:coeNet.net>=0?'#059669':'#DC2626'}}>{fmt(coeNet.net)}</span>
+          </div>
+          <div style={{fontSize:'10px',color:'#CBD5E1',marginTop:'2px'}}>Tracked separately — pass-through funds, not part of primary contract</div>
         </div>
         <div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',padding:'14px'}}>
           <div style={{fontSize:'10px',fontWeight:'700',color:'#64748B',letterSpacing:'0.06em',marginBottom:'10px'}}>GRANT TIMELINE</div>
@@ -569,6 +656,10 @@ function BudgetTab({txns,amendments,setAmendments}){
   const [newA,setNewA]=useState({date:'',category:'',description:'',amount:''});
   const bud=BUDGET[selFY]||BUDGET['FY25/26'];
 
+  // Single source of truth for carryover — same chain used by Overview & Multi-Year
+  const fiscalChain=useMemo(()=>computeFiscalChain(txns),[txns]);
+  const chainRow=fiscalChain.find(r=>r.fy===selFY);
+
   // Per-year actuals
   const actuals=useMemo(()=>{
     const m={};
@@ -576,10 +667,10 @@ function BudgetTab({txns,amendments,setAmendments}){
     return m;
   },[txns,selFY]);
 
-  // All-years actuals (for combined view)
+  // All-years actuals (for combined view) — includes indirect costs (0110030), same scope as per-year actuals above
   const allActuals=useMemo(()=>{
     const m={};
-    txns.filter(t=>t.account==='0110029').forEach(t=>{m[t.sacs_group]=(m[t.sacs_group]||0)+t.amt;});
+    txns.filter(t=>t.account==='0110029'||t.account==='0110030').forEach(t=>{m[t.sacs_group]=(m[t.sacs_group]||0)+t.amt;});
     return m;
   },[txns]);
   const allBudget=useMemo(()=>{
@@ -612,7 +703,7 @@ function BudgetTab({txns,amendments,setAmendments}){
         </div>
       </div>
 
-      {!allYears&&(bud.carryover||0)>0&&<Alert type="info"><strong>{selFY}</strong> includes est. <strong>{fmt(bud.carryover)}</strong> carryover. Combined available: <strong>{fmt(bud.contract+(bud.carryover||0))}</strong></Alert>}
+      {!allYears&&chainRow&&chainRow.carryoverIn>0&&<Alert type="info"><strong>{selFY}</strong> includes <strong>{fmt(chainRow.carryoverIn)}</strong> carryover from prior-year underspend. Combined available: <strong>{fmt(chainRow.available)}</strong></Alert>}
 
       {/* Single-year view */}
       {!allYears&&<div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',overflow:'hidden'}}>
@@ -728,169 +819,6 @@ function BudgetTab({txns,amendments,setAmendments}){
           </table>
         }
       </div>}
-    </div>
-  );
-}
-
-// ── Revenue Tracker Tab ───────────────────────────────────────────────────────
-function RevenueTab({txns,events,setEvents,userRole}){
-  const [section,setSection]=useState('coe');
-  const [showForm,setShowForm]=useState(false);
-  const [editingId,setEditingId]=useState(null);
-  const [editForm,setEditForm]=useState({});
-  const [editPartners,setEditPartners]=useState([]);
-  const [form,setForm]=useState({eventName:'',subject:'Science',date:'',invoiceNo:''});
-  const [pRows,setPRows]=useState([{id:1,partner:'',amount:'',txnId238:'',paid:false}]);
-  const rev237=txns.filter(t=>t.account==='0110237'&&t.sacs_group==='8xxx');
-  const exp238=txns.filter(t=>t.account==='0110238');
-  const receivedTotal=PAYMENTS.filter(p=>p.status==='received').reduce((s,p)=>s+p.amt,0);
-  const readyTotal=PAYMENTS.filter(p=>p.status==='ready').reduce((s,p)=>s+p.amt,0);
-  const byInv=useMemo(()=>{const m={};events.forEach(ev=>{const k=ev.invoiceNo||('_'+ev.id);if(!m[k])m[k]={invoiceNo:ev.invoiceNo,coe:ev.coe,events:[],total:0};m[k].events.push(ev);m[k].total+=ev.partners.reduce((s,p)=>s+(parseFloat(p.amount)||0),0);});return Object.values(m);},[events]);
-  const statusL={building:'Building',sent:'Invoice Sent',received:'Received',discrepancy:'Discrepancy'};
-  const statusBg={building:'#F1F5F9',sent:'#DBEAFE',received:'#D1FAE5',discrepancy:'#FEE2E2'};
-  const statusTc={building:'#64748B',sent:'#1D4ED8',received:'#065F46',discrepancy:'#991B1B'};
-  const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'8px 12px',width:'100%'};
-  const canDelete=userRole==='director'||userRole==='admin_support';
-  function addEvent(){
-    const rows=pRows.filter(r=>r.partner&&r.amount);if(!form.eventName||rows.length===0)return;
-    const newEv={id:Date.now(),eventName:form.eventName,subject:form.subject,coe:COE_MAP[form.subject],date:form.date,invoiceNo:form.invoiceNo,partners:rows,invoiceStatus:'building',txn237:''};
-    setEvents(ev=>[...ev,newEv]);
-    logActivity('event_added',`Added COE event: "${form.eventName}"`,{subject:form.subject,coe:COE_MAP[form.subject],partnerCount:rows.length});
-    setForm({eventName:'',subject:'Science',date:'',invoiceNo:''});setPRows([{id:Date.now(),partner:'',amount:'',txnId238:'',paid:false}]);setShowForm(false);
-  }
-  function startEdit(ev){
-    setEditingId(ev.id);
-    setEditForm({eventName:ev.eventName,subject:ev.subject,date:ev.date,invoiceNo:ev.invoiceNo||'',invoiceStatus:ev.invoiceStatus||'building',txn237:ev.txn237||''});
-    setEditPartners((ev.partners||[]).map(p=>({...p,txnId238:p.txnId238||p.txnId||''})));
-  }
-  function saveEdit(evId){
-    const before=events.find(x=>x.id===evId);
-    if(before) saveEventHistory('updated',before);
-    setEvents(es=>es.map(x=>x.id!==evId?x:{...x,...editForm,coe:COE_MAP[editForm.subject]||x.coe,partners:editPartners}));
-    logActivity('event_edited',`Edited COE event: "${editForm.eventName}"`,{eventId:evId,status:editForm.invoiceStatus});
-    setEditingId(null);
-  }
-  function deleteEvent(evId){
-    const ev=events.find(x=>x.id===evId);
-    if(ev) saveEventHistory('deleted',ev);
-    setEvents(es=>es.filter(x=>x.id!==evId));
-    if(ev) logActivity('event_deleted',`Deleted COE event: "${ev.eventName}"`,{eventId:evId,subject:ev.subject});
-  }
-  const tabBtn=(k,l)=><button onClick={()=>setSection(k)} style={{background:'none',border:'none',borderBottom:section===k?'2px solid #1D4ED8':'2px solid transparent',padding:'0 4px 10px',fontSize:'14px',fontWeight:'600',color:section===k?'#1D4ED8':'#64748B',cursor:'pointer',marginBottom:'-2px'}}>{l}</button>;
-  return(
-    <div>
-      <div style={{display:'flex',gap:'20px',borderBottom:'2px solid #E2E8F0',marginBottom:'20px'}}>{tabBtn('primary','Primary Allocation')}{tabBtn('coe','COE Reimbursement')}</div>
-      {section==='primary'&&(
-        <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'12px'}}>
-            <KpiCard label="Received (Pmts 1-3)" value={fmt(receivedTotal)} accent="#059669"/>
-            <KpiCard label="Ready to Invoice (4-6)" value={fmt(readyTotal)} color="#1D4ED8" accent="#1D4ED8"/>
-            <KpiCard label="Remaining (Pmts 7-9)" value={fmt(502280-receivedTotal-readyTotal)} accent="#64748B"/>
-          </div>
-          <Alert type="success">All spending triggers through Payment 8 have been met. Payments 4-6 ({fmt(readyTotal)}) can be invoiced immediately.</Alert>
-          <div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',overflow:'hidden'}}>
-            <table style={{width:'100%',borderCollapse:'collapse'}}>
-              <thead><tr style={{background:'#F8FAFC',borderBottom:'1px solid #E2E8F0'}}>{['Pmt #','Allocation','Grant Year','Amount','Trigger Condition','Status'].map((h,i)=><th key={h} style={{padding:'10px 16px',fontSize:'11px',fontWeight:'700',color:'#64748B',textTransform:'uppercase',textAlign:i===3?'right':'left'}}>{h}</th>)}</tr></thead>
-              <tbody>{PAYMENTS.map(p=>(<tr key={p.n} style={{background:p.status==='ready'?'#EFF6FF':p.status==='pending'?'#FFFBEB':'white',borderBottom:'1px solid #F8FAFC'}}>
-                <td style={{padding:'10px 16px',fontWeight:'700',color:'#1E293B'}}>Pmt {p.n}</td><td style={{padding:'10px 16px',color:'#64748B'}}>{p.alloc}</td>
-                <td style={{padding:'10px 16px',color:'#64748B'}}>{p.fy}</td><td style={{padding:'10px 16px',textAlign:'right',fontWeight:'700'}}>{fmt(p.amt)}</td>
-                <td style={{padding:'10px 16px',color:'#64748B',fontSize:'12px'}}>{p.trigger}</td><td style={{padding:'10px 16px'}}><StatusBadge status={p.status}/></td>
-              </tr>))}</tbody>
-            </table>
-          </div>
-        </div>
-      )}
-      {section==='coe'&&(
-        <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'12px'}}>
-            <KpiCard label="COE Revenue Received" value={fmt(rev237.reduce((s,t)=>s+t.amt,0))} accent="#D97706"/>
-            <KpiCard label="COE Expenses Paid" value={fmt(exp238.reduce((s,t)=>s+t.amt,0))} accent="#D97706"/>
-            <KpiCard label="Tracked Events" value={events.length} sub={byInv.length+' invoice group(s)'} accent="#D97706"/>
-          </div>
-          {(()=>{const up=events.flatMap(ev=>ev.partners.filter(p=>!p.paid));const uc=up.length;const ua=up.reduce((s,p)=>s+(parseFloat(p.amount)||0),0);return uc>0?(<div style={{background:'#FEF3C7',border:'1px solid #FDE68A',borderRadius:'10px',padding:'12px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}}><div style={{display:'flex',alignItems:'center',gap:'10px'}}><span style={{fontSize:'18px'}}>⏳</span><div><div style={{fontWeight:'700',color:'#92400E',fontSize:'13px'}}>{uc} partner payment{uc!==1?'s':''} outstanding</div><div style={{fontSize:'12px',color:'#78350F',marginTop:'2px'}}>Across {[...new Set(events.filter(ev=>ev.partners.some(p=>!p.paid)).map(ev=>ev.subject))].join(', ')}</div></div></div><div style={{textAlign:'right'}}><div style={{fontSize:'20px',fontWeight:'700',color:'#92400E'}}>{fmt(ua)}</div><div style={{fontSize:'11px',color:'#78350F'}}>total pending</div></div></div>):null;})()}
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-            <div><h3 style={{fontSize:'15px',fontWeight:'700',color:'#1E293B',margin:'0 0 4px'}}>COE Reimbursement Events</h3><p style={{fontSize:'13px',color:'#64748B',margin:0}}>Log partner payments · Bundle into COE invoices · Match to received revenue</p></div>
-            <button onClick={()=>{setShowForm(v=>!v);setEditingId(null);}} style={{background:'#D97706',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontWeight:'600',cursor:'pointer'}}>+ Add Event</button>
-          </div>
-          {showForm&&(
-            <div style={{background:'#FFFBEB',border:'1px solid #FED7AA',borderRadius:'12px',padding:'20px',display:'flex',flexDirection:'column',gap:'14px'}}>
-              <h4 style={{margin:0,fontSize:'14px',fontWeight:'700',color:'#92400E'}}>New COE Reimbursement Event</h4>
-              <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:'10px'}}><div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'4px'}}>Event Name</label><input value={form.eventName} onChange={e=>setForm(p=>({...p,eventName:e.target.value}))} placeholder="e.g. Fall Science CoP Convening" style={inp}/></div><div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'4px'}}>Subject Area</label><select value={form.subject} onChange={e=>setForm(p=>({...p,subject:e.target.value}))} style={inp}><option>Science</option><option>Math</option><option>Computer Science</option></select></div></div>
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'10px'}}><div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'4px'}}>Date</label><input type="date" value={form.date} onChange={e=>setForm(p=>({...p,date:e.target.value}))} style={inp}/></div><div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'4px'}}>COE Payer</label><div style={{...inp,background:'#FEF3C7',color:'#92400E',fontWeight:'600'}}>{COE_MAP[form.subject]} COE</div></div><div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'4px'}}>Invoice # (shared if bundled)</label><input value={form.invoiceNo} onChange={e=>setForm(p=>({...p,invoiceNo:e.target.value}))} placeholder="e.g. INV-2026-001" style={inp}/></div></div>
-              <div><div style={{fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'8px'}}>Partner Payments (0110238)</div>
-                {pRows.map((row,i)=>(<div key={row.id} style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr auto',gap:'8px',marginBottom:'8px',alignItems:'center'}}>
-                  <input placeholder="Partner name" value={row.partner} onChange={e=>setPRows(r=>r.map((x,j)=>j===i?{...x,partner:e.target.value}:x))} style={inp}/>
-                  <input placeholder="Amount $" value={row.amount} onChange={e=>setPRows(r=>r.map((x,j)=>j===i?{...x,amount:e.target.value}:x))} style={inp}/>
-                  <label style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'13px',color:'#334155'}}><input type="checkbox" checked={row.paid} onChange={e=>setPRows(r=>r.map((x,j)=>j===i?{...x,paid:e.target.checked}:x))} style={{width:'15px',height:'15px'}}/> Paid</label>
-                  {pRows.length>1&&<button onClick={()=>setPRows(r=>r.filter((_,j)=>j!==i))} style={{background:'none',border:'none',color:'#94A3B8',cursor:'pointer',fontSize:'18px',lineHeight:1}}>x</button>}
-                </div>))}
-                <button onClick={()=>setPRows(r=>[...r,{id:Date.now(),partner:'',amount:'',txnId238:'',paid:false}])} style={{background:'none',border:'none',color:'#1D4ED8',fontSize:'12px',cursor:'pointer',padding:0,fontWeight:'600'}}>+ Add another partner</button>
-              </div>
-              <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}><button onClick={()=>setShowForm(false)} style={{border:'1px solid #E2E8F0',background:'white',borderRadius:'8px',padding:'8px 16px',cursor:'pointer',color:'#64748B'}}>Cancel</button><button onClick={addEvent} style={{background:'#D97706',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontWeight:'600',cursor:'pointer'}}>Save Event</button></div>
-            </div>
-          )}
-          {events.length===0?<div style={{background:'white',border:'2px dashed #E2E8F0',borderRadius:'12px',padding:'40px',textAlign:'center',color:'#94A3B8'}}><div style={{fontSize:'28px',marginBottom:'8px'}}>📋</div><p style={{margin:0,fontSize:'13px'}}>No events tracked yet.</p></div>:
-            <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>{byInv.map(inv=>(
-              <div key={inv.invoiceNo||'no-inv'} style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',overflow:'hidden'}}>
-                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 16px',background:'#F8FAFC',borderBottom:'1px solid #E2E8F0'}}>
-                  <div style={{display:'flex',alignItems:'center',gap:'10px'}}><span style={{fontWeight:'700',color:'#1E293B'}}>{inv.invoiceNo||'(No invoice # assigned)'}</span><span style={{fontSize:'12px',color:'#64748B'}}>- {inv.coe} COE - {inv.events.length} event(s)</span></div>
-                  <span style={{fontWeight:'700',fontSize:'15px',color:'#1E293B'}}>{fmt(inv.total)}</span>
-                </div>
-                {inv.events.map(ev=>(
-                  editingId===ev.id?(
-                    <div key={ev.id} style={{padding:'16px',borderBottom:'1px solid #F8FAFC',background:'#FAFCFF'}}>
-                      <div style={{fontWeight:'700',color:'#1E293B',fontSize:'13px',marginBottom:'12px'}}>Editing: {ev.eventName}</div>
-                      <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:'10px',marginBottom:'10px'}}>
-                        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Event Name</label><input value={editForm.eventName||''} onChange={e=>setEditForm(p=>({...p,eventName:e.target.value}))} style={inp}/></div>
-                        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Subject Area</label><select value={editForm.subject||'Science'} onChange={e=>setEditForm(p=>({...p,subject:e.target.value}))} style={inp}><option>Science</option><option>Math</option><option>Computer Science</option></select></div>
-                      </div>
-                      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:'10px',marginBottom:'10px'}}>
-                        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Date</label><input type="date" value={editForm.date||''} onChange={e=>setEditForm(p=>({...p,date:e.target.value}))} style={inp}/></div>
-                        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Invoice #</label><input value={editForm.invoiceNo||''} onChange={e=>setEditForm(p=>({...p,invoiceNo:e.target.value}))} placeholder="INV-..." style={inp}/></div>
-                        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Status</label><select value={editForm.invoiceStatus||'building'} onChange={e=>setEditForm(p=>({...p,invoiceStatus:e.target.value}))} style={inp}>{Object.entries(statusL).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></div>
-                        <div><label style={{display:'block',fontSize:'11px',color:'#059669',fontWeight:'600',marginBottom:'3px'}}>0110237 Txn ID (COE receipt)</label><input value={editForm.txn237||''} onChange={e=>setEditForm(p=>({...p,txn237:e.target.value}))} placeholder="Ledger txn ID" style={{...inp,background:'#ECFDF5',borderColor:'#A7F3D0'}}/></div>
-                      </div>
-                      <div style={{marginBottom:'10px'}}>
-                        <div style={{fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'6px'}}>Partner Payments (0110238)</div>
-                        {editPartners.map((row,i)=>(<div key={row.id||i} style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr 1fr auto',gap:'6px',marginBottom:'6px',alignItems:'center'}}>
-                          <input placeholder="Partner name" value={row.partner||''} onChange={e=>setEditPartners(r=>r.map((x,j)=>j===i?{...x,partner:e.target.value}:x))} style={inp}/>
-                          <input placeholder="Amount $" value={row.amount||''} onChange={e=>setEditPartners(r=>r.map((x,j)=>j===i?{...x,amount:e.target.value}:x))} style={inp}/>
-                          <input placeholder="0110238 Txn ID" value={row.txnId238||''} onChange={e=>setEditPartners(r=>r.map((x,j)=>j===i?{...x,txnId238:e.target.value}:x))} style={{...inp,background:'#FFF7ED',borderColor:'#FED7AA'}}/>
-                          <label style={{display:'flex',alignItems:'center',gap:'4px',fontSize:'12px',whiteSpace:'nowrap'}}><input type="checkbox" checked={!!row.paid} onChange={e=>setEditPartners(r=>r.map((x,j)=>j===i?{...x,paid:e.target.checked}:x))}/> Paid</label>
-                          {editPartners.length>1&&<button onClick={()=>setEditPartners(r=>r.filter((_,j)=>j!==i))} style={{background:'none',border:'none',color:'#94A3B8',cursor:'pointer',fontSize:'16px'}}>x</button>}
-                        </div>))}
-                        <button onClick={()=>setEditPartners(r=>[...r,{id:Date.now(),partner:'',amount:'',txnId238:'',paid:false}])} style={{background:'none',border:'none',color:'#1D4ED8',fontSize:'12px',cursor:'pointer',padding:0,fontWeight:'600'}}>+ Add partner</button>
-                      </div>
-                      <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
-                        <button onClick={()=>setEditingId(null)} style={{border:'1px solid #E2E8F0',background:'white',borderRadius:'8px',padding:'7px 14px',cursor:'pointer',color:'#64748B',fontSize:'13px'}}>Cancel</button>
-                        <button onClick={()=>saveEdit(ev.id)} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'7px 14px',fontWeight:'600',cursor:'pointer',fontSize:'13px'}}>Save Changes</button>
-                      </div>
-                    </div>
-                  ):(
-                    <div key={ev.id} style={{padding:'12px 16px',borderBottom:'1px solid #F8FAFC'}}>
-                      <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between'}}>
-                        <div style={{flex:1}}>
-                          <div style={{fontWeight:'600',fontSize:'14px',color:'#1E293B'}}>{ev.eventName}</div>
-                          <div style={{fontSize:'12px',color:'#64748B',marginTop:'2px'}}>{ev.subject} - {ev.coe} COE - {ev.date||'No date'}</div>
-                          {ev.txn237&&<div style={{fontSize:'11px',color:'#059669',marginTop:'3px',fontWeight:'600'}}>COE receipt matched: {ev.txn237}</div>}
-                          <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginTop:'8px'}}>
-                            {ev.partners.map((p,pi)=><span key={pi} style={{padding:'2px 8px',borderRadius:'20px',fontSize:'11px',fontWeight:'600',background:p.paid?'#D1FAE5':'#F1F5F9',color:p.paid?'#065F46':'#475569'}}>{p.partner}: {fmt(parseFloat(p.amount)||0)} {p.paid?'(paid)':'(pending)'}{p.txnId238?' ['+p.txnId238+']':''}</span>)}
-                          </div>
-                        </div>
-                        <div style={{display:'flex',alignItems:'center',gap:'8px',marginLeft:'12px',flexShrink:0}}>
-                          <span style={{padding:'3px 10px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:statusBg[ev.invoiceStatus]||'#F1F5F9',color:statusTc[ev.invoiceStatus]||'#64748B'}}>{statusL[ev.invoiceStatus]||ev.invoiceStatus}</span>
-                          <button onClick={()=>startEdit(ev)} style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'6px',padding:'4px 10px',cursor:'pointer',color:'#1D4ED8',fontSize:'12px',fontWeight:'600'}}>Edit</button>
-                          {canDelete&&<button onClick={()=>deleteEvent(ev.id)} style={{background:'none',border:'none',color:'#94A3B8',cursor:'pointer',fontSize:'18px'}} onMouseOver={e=>e.target.style.color='#EF4444'} onMouseOut={e=>e.target.style.color='#94A3B8'}>x</button>}
-                        </div>
-                      </div>
-                    </div>
-                  )
-                ))}
-              </div>
-            ))}</div>
-          }
-        </div>
-      )}
     </div>
   );
 }
@@ -1206,38 +1134,54 @@ function AuditSummaryTab({txns,enrichments,auditTags}){
 
 // ── Carryover Tab ─────────────────────────────────────────────────────────────
 function CarryoverTab({txns}){
-  const byFY=useMemo(()=>{const m={};txns.filter(t=>t.account==='0110029').forEach(t=>{m[t.fy]=(m[t.fy]||0)+t.amt;});return m;},[txns]);
-  const rows=[
-    {fy:'FY23/24',contract:133941,carryover:0,actual:byFY['FY23/24']||0,note:'First Allocation received upfront'},
-    {fy:'FY24/25',contract:133941,carryover:52837,actual:byFY['FY24/25']||0,note:'Carryover from FY23/24 underspend'},
-    {fy:'FY25/26',contract:133941,carryover:14543,actual:byFY['FY25/26']||0,note:'Carryover est.; Pmts 4-7 pending receipt'},
-    {fy:'FY26/27',contract:100457,carryover:77532,actual:0,note:'Projected: large carryover from FY25/26'},
-  ];
-  const chartData=rows.map(r=>({fy:r.fy,Contract:r.contract,Carryover:r.carryover,'Actual Spend':Math.round(r.actual||0)}));
+  const rows=useMemo(()=>computeFiscalChain(txns),[txns]);
+  const coeNet=useMemo(()=>computeCoeNetPosition(txns),[txns]);
+  const nowFY=currentFY();
+  const lastRow=rows[rows.length-1];
+  const chartData=rows.map(r=>({fy:r.fy,Contract:r.contract,Carryover:r.carryoverIn,'Actual Spend':Math.round(r.actual||0)}));
   const th={padding:'10px 16px',fontSize:'11px',fontWeight:'700',color:'#64748B',textTransform:'uppercase',letterSpacing:'0.05em',background:'#F8FAFC',borderBottom:'1px solid #E2E8F0'};
   const td={padding:'10px 16px',fontSize:'13px',color:'#334155',borderBottom:'1px solid #F8FAFC'};
+  function noteFor(r,i){
+    if(i===0) return 'First Allocation received upfront';
+    if(r.isFuture) return `Projected — carries forward est. underspend from ${rows[i-1].fy}`;
+    if(r.isCurrent) return `Current year — carryover in reflects actual ${rows[i-1].fy} underspend`;
+    return `Carryover reflects actual ${rows[i-1].fy} underspend`;
+  }
   return(
     <div style={{display:'flex',flexDirection:'column',gap:'20px'}}>
-      <Alert type="info"><strong>FY26/27 Projection:</strong> With ~$77,500 in unspent FY25/26 funds plus the $100,457 FY26/27 contract, up to <strong>$177,989</strong> may be available for Year 5. Pending invoice receipts will affect these projections.</Alert>
+      <Alert type="info">
+        <strong>{lastRow.fy} Projection:</strong> With {fmt(lastRow.carryoverIn)} carried in from prior-year underspend plus the {fmt(lastRow.contract)} {lastRow.fy} contract, up to <strong>{fmt(lastRow.available)}</strong> may be available for the final year. This figure updates automatically as real transactions post — it is not a fixed estimate.
+      </Alert>
       <div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',overflow:'hidden'}}>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr><th style={{...th,textAlign:'left'}}>Fiscal Year</th><th style={{...th,textAlign:'right'}}>Contract</th><th style={{...th,textAlign:'right'}}>Carryover In</th><th style={{...th,textAlign:'right'}}>Total Available</th><th style={{...th,textAlign:'right'}}>Actual Spent</th><th style={{...th,textAlign:'right'}}>Carryover Out</th><th style={{...th,textAlign:'left'}}>Notes</th></tr></thead>
-          <tbody>{rows.map(r=>{const ta=r.contract+r.carryover;const co=ta-(r.actual||0);return(
-            <tr key={r.fy} style={{background:'white'}} onMouseOver={e=>e.currentTarget.style.background='#F8FAFC'} onMouseOut={e=>e.currentTarget.style.background='white'}>
-              <td style={{...td,fontWeight:'700'}}>{r.fy}</td><td style={{...td,textAlign:'right'}}>{fmt(r.contract)}</td>
-              <td style={{...td,textAlign:'right',color:'#D97706',fontWeight:'600'}}>{r.carryover>0?fmt(r.carryover):'--'}</td>
-              <td style={{...td,textAlign:'right',fontWeight:'700'}}>{fmt(ta)}</td>
-              <td style={{...td,textAlign:'right'}}>{r.actual>0?fmt(r.actual):<span style={{color:'#94A3B8',fontStyle:'italic'}}>projected</span>}</td>
-              <td style={{...td,textAlign:'right',fontWeight:'700',color:co>0?'#D97706':'#059669'}}>{fmt(co)}</td>
-              <td style={{...td,fontSize:'12px',color:'#64748B'}}>{r.note}</td>
+          <tbody>{rows.map((r,i)=>(
+            <tr key={r.fy} style={{background:r.isCurrent?'#EFF6FF':'white'}} onMouseOver={e=>e.currentTarget.style.background=r.isCurrent?'#DBEAFE':'#F8FAFC'} onMouseOut={e=>e.currentTarget.style.background=r.isCurrent?'#EFF6FF':'white'}>
+              <td style={{...td,fontWeight:'700'}}>{r.fy}{r.isCurrent&&<span style={{marginLeft:'6px',fontSize:'10px',fontWeight:'700',color:'#1D4ED8'}}>CURRENT</span>}</td>
+              <td style={{...td,textAlign:'right'}}>{fmt(r.contract)}</td>
+              <td style={{...td,textAlign:'right',color:'#D97706',fontWeight:'600'}}>{r.carryoverIn>0?fmt(r.carryoverIn):'--'}</td>
+              <td style={{...td,textAlign:'right',fontWeight:'700'}}>{fmt(r.available)}</td>
+              <td style={{...td,textAlign:'right'}}>{r.actual>0?fmt(r.actual):<span style={{color:'#94A3B8',fontStyle:'italic'}}>none yet</span>}</td>
+              <td style={{...td,textAlign:'right',fontWeight:'700',color:r.carryoverOut>0?'#D97706':'#059669'}}>{fmt(r.carryoverOut)}</td>
+              <td style={{...td,fontSize:'12px',color:'#64748B'}}>{noteFor(r,i)}</td>
             </tr>
-          );})}</tbody>
+          ))}</tbody>
         </table>
       </div>
       <div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',padding:'20px'}}>
         <h3 style={{fontSize:'14px',fontWeight:'700',color:'#1E293B',margin:'0 0 4px'}}>Available Funds vs. Actual Spend by Year</h3>
-        <p style={{fontSize:'12px',color:'#64748B',margin:'0 0 16px'}}>Left bar = Contract + Carryover stacked  Right bar = Actual Spend</p>
+        <p style={{fontSize:'12px',color:'#64748B',margin:'0 0 16px'}}>Left bar = Contract + Carryover stacked  Right bar = Actual Spend (primary allocation, incl. indirect)</p>
         <StackedBarChart data={chartData} height={260}/>
+      </div>
+      <div style={{background:'#FFFBEB',border:'1px solid #FDE68A',borderRadius:'12px',padding:'18px'}}>
+        <h3 style={{fontSize:'14px',fontWeight:'700',color:'#92400E',margin:'0 0 4px'}}>COE Reimbursement Net Position — tracked separately</h3>
+        <p style={{fontSize:'12px',color:'#78350F',margin:'0 0 14px'}}>Pass-through funds from partner reimbursement agreements (0110237 revenue vs. 0110238 expense), cumulative since program start. This is intentionally kept separate from the primary allocation carryover above — it isn't CDE contract money and shouldn't be blended into "available for Year 5" figures.</p>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'12px'}}>
+          <KpiCard label="Cumulative Revenue (0110237)" value={fmt(coeNet.rev)} accent="#D97706"/>
+          <KpiCard label="Cumulative Expenses (0110238)" value={fmt(coeNet.exp)} accent="#D97706"/>
+          <KpiCard label="Net Surplus / (Deficit)" value={fmt(coeNet.net)} color={coeNet.net>=0?'#059669':'#DC2626'} accent={coeNet.net>=0?'#059669':'#DC2626'}/>
+        </div>
+        {coeNet.net>0&&<p style={{fontSize:'12px',color:'#78350F',margin:'12px 0 0'}}>As remaining 0110237/0110238 transactions get entered and reconciled, this surplus may grow. Once fully documented, these funds could be considered for reallocation toward additional partner payments or program activities — a decision for the fiscal team, separate from the primary grant contract's spend-down schedule.</p>}
       </div>
     </div>
   );
@@ -1416,30 +1360,45 @@ function TeamPanel({currentUid,currentRole,onClose}){
 
 
 // ── Allocation Schedule (extracted from old Revenue Tracker) ──────────────────
-function AllocationView(){
+function AllocationView({txns}){
   const receivedTotal=PAYMENTS.filter(p=>p.status==='received').reduce((s,p)=>s+p.amt,0);
   const readyTotal=PAYMENTS.filter(p=>p.status==='ready').reduce((s,p)=>s+p.amt,0);
+  const reconciled=useMemo(()=>computePaymentReconciliation(txns),[txns]);
+  const mismatchCount=reconciled.filter(p=>p.mismatch).length;
   return(
     <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
       <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'12px'}}>
         <KpiCard label="Received (Pmts 1-3)" value={fmt(receivedTotal)} accent="#059669"/>
         <KpiCard label="Ready to Invoice (4-6)" value={fmt(readyTotal)} color="#1D4ED8" accent="#1D4ED8"/>
-        <KpiCard label="Remaining (Pmts 7-9)" value={fmt(502280-receivedTotal-readyTotal)} accent="#64748B"/>
+        <KpiCard label="Remaining (Pmts 7-9)" value={fmt(CONTRACT_TOTAL_DISPLAY-receivedTotal-readyTotal)} accent="#64748B"/>
       </div>
       <Alert type="success">All spending triggers through Payment 8 have been met. Payments 4-6 ({fmt(readyTotal)}) can be invoiced immediately.</Alert>
+      {mismatchCount>0&&(
+        <Alert type="warn"><strong>{mismatchCount} payment{mismatchCount!==1?'s':''}</strong> {mismatchCount!==1?'have':'has'} a recorded status that doesn't match what the ledger data suggests — see the "System check" note under each flagged row below. Status is kept manual since real-world cash timing can't always be reconstructed automatically; use these as a prompt to double-check, not an auto-correction.</Alert>
+      )}
       <div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',overflow:'hidden'}}>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr style={{background:'#F8FAFC',borderBottom:'1px solid #E2E8F0'}}>{['Pmt #','Allocation','Grant Year','Amount','Trigger Condition','Status'].map((h,i)=><th key={h} style={{padding:'10px 16px',fontSize:'11px',fontWeight:'700',color:'#64748B',textTransform:'uppercase',textAlign:i===3?'right':'left'}}>{h}</th>)}</tr></thead>
-          <tbody>{PAYMENTS.map(p=>(<tr key={p.n} style={{background:p.status==='ready'?'#EFF6FF':p.status==='pending'?'#FFFBEB':'white',borderBottom:'1px solid #F8FAFC'}}>
-            <td style={{padding:'10px 16px',fontWeight:'700',color:'#1E293B'}}>Pmt {p.n}</td>
-            <td style={{padding:'10px 16px',color:'#64748B'}}>{p.alloc}</td>
-            <td style={{padding:'10px 16px',color:'#64748B'}}>{p.fy}</td>
-            <td style={{padding:'10px 16px',textAlign:'right',fontWeight:'700'}}>{fmt(p.amt)}</td>
-            <td style={{padding:'10px 16px',color:'#64748B',fontSize:'12px'}}>{p.trigger}</td>
-            <td style={{padding:'10px 16px'}}><StatusBadge status={p.status}/></td>
-          </tr>))}</tbody>
+          <tbody>{reconciled.map(p=>(<React.Fragment key={p.n}>
+            <tr style={{background:p.status==='ready'?'#EFF6FF':p.status==='pending'?'#FFFBEB':'white',borderBottom:p.mismatch?'none':'1px solid #F8FAFC'}}>
+              <td style={{padding:'10px 16px',fontWeight:'700',color:'#1E293B'}}>Pmt {p.n}</td>
+              <td style={{padding:'10px 16px',color:'#64748B'}}>{p.alloc}</td>
+              <td style={{padding:'10px 16px',color:'#64748B'}}>{p.fy}</td>
+              <td style={{padding:'10px 16px',textAlign:'right',fontWeight:'700'}}>{fmt(p.amt)}</td>
+              <td style={{padding:'10px 16px',color:'#64748B',fontSize:'12px'}}>{p.trigger}</td>
+              <td style={{padding:'10px 16px'}}><StatusBadge status={p.status}/></td>
+            </tr>
+            {p.mismatch&&(
+              <tr style={{background:p.status==='ready'?'#EFF6FF':p.status==='pending'?'#FFFBEB':'white',borderBottom:'1px solid #F8FAFC'}}>
+                <td colSpan={6} style={{padding:'0 16px 10px',fontSize:'11px',color:'#D97706'}}>
+                  ⚠ System check: ledger data suggests this payment may now be <strong>"{p.estimatedStatus}"</strong> instead of the recorded "{p.status}" — worth a manual review.
+                </td>
+              </tr>
+            )}
+          </React.Fragment>))}</tbody>
         </table>
       </div>
+      <p style={{fontSize:'11px',color:'#94A3B8',margin:0}}>Status above is set manually. The system check compares real cumulative cash received (0110028) and cumulative primary spend (0110029+0110030) against each payment's trigger threshold, but does not auto-override — timing and partial deposits can't always be reconstructed precisely from ledger sums alone.</p>
     </div>
   );
 }
@@ -1457,7 +1416,7 @@ function FiscalHealthTab({txns,amendments,setAmendments}){
       </div>
       {view==='year'&&<BudgetTab txns={txns} amendments={amendments} setAmendments={setAmendments}/>}
       {view==='multiyear'&&<CarryoverTab txns={txns}/>}
-      {view==='allocation'&&<AllocationView/>}
+      {view==='allocation'&&<AllocationView txns={txns}/>}
     </div>
   );
 }
@@ -1588,6 +1547,8 @@ function PartnerPaymentsTab({payments,userRole}){
     setFormError('');
     if(!form.recipient.trim()){setFormError('Recipient name is required.');return;}
     try{
+      const before=payments.find(x=>x.id===editId);
+      if(before) await saveEventHistory('updated',{...before,eventName:before.recipient});
       await FS.paymentUpdate(editId,{recipient:form.recipient,recipientType:form.recipientType,paymentType:form.paymentType,description:form.description,amount:parseFloat(form.amount)||0,fundingSource:form.fundingSource,fyYear:form.fyYear,agreementRef:form.agreementRef,expectedDate:form.expectedDate,txnId:form.txnId||'',paidDate:form.paidDate||'',paidAmount:parseFloat(form.paidAmount)||0});
       logActivity('payment_edited',`Edited payment: "${form.recipient}"`,{id:editId});
       setEditId(null);
@@ -1596,7 +1557,8 @@ function PartnerPaymentsTab({payments,userRole}){
     }
   }
   async function handleDelete(p){
-    if(!window.confirm(`Delete payment for "${p.recipient}"? This cannot be undone.`)) return;
+    if(!window.confirm(`Delete payment for "${p.recipient}"? This cannot be undone — a snapshot will be kept in the retention log.`)) return;
+    await saveEventHistory('deleted',{...p,eventName:p.recipient});
     await FS.paymentDelete(p.id);
     logActivity('payment_deleted',`Deleted payment: "${p.recipient}" — ${fmt(parseFloat(p.amount)||0)}`,{id:p.id});
   }
@@ -1999,7 +1961,6 @@ function App(){
   const [enrichments,setEnrichments]=useState({});
   const [auditTags,setAuditTags]=useState({});
   const [todos,setTodos]=useState([]);
-  const [events,setEvents]=useState([]);
   const [amendments,setAmendments]=useState([]);
   const [payments,setPayments]=useState([]);
 
@@ -2027,11 +1988,10 @@ function App(){
 
   useEffect(()=>{
     if(!user||roleLoading)return;
-    let n=0;const done=()=>{if(++n>=6)setDataLoading(false);};
+    let n=0;const done=()=>{if(++n>=5)setDataLoading(false);};
     const subs=[
       _db.collection('transactions').onSnapshot(s=>{setTransactions(s.docs.map(d=>d.data()));setTxnLoading(false);done();},e=>{console.error('Txn:',e);setTxnLoading(false);done();}),
       _col('todos').onSnapshot(s=>{if(!s.exists){FS.todos(INITIAL_TODOS);setTodos(INITIAL_TODOS);}else setTodos(s.data().items||[]);done();}),
-      _col('events').onSnapshot(s=>{setEvents(s.exists?s.data().items||[]:[]);done();}),
       _col('amendments').onSnapshot(s=>{setAmendments(s.exists?s.data().items||[]:[]);done();}),
       _col('auditTags').onSnapshot(s=>{setAuditTags(s.exists?s.data().data||{}:{});done();}),
       _col('enrichments').onSnapshot(s=>{setEnrichments(s.exists?s.data().data||{}:{});done();}),
@@ -2057,7 +2017,6 @@ function App(){
   },[user]);
 
   function updTodos(fn){setTodos(p=>{const n=typeof fn==='function'?fn(p):fn;setTimeout(()=>FS.todos(n),0);return n;});}
-  function updEvents(fn){setEvents(p=>{const n=typeof fn==='function'?fn(p):fn;setTimeout(()=>FS.events(n),0);return n;});}
   function updAmendments(fn){setAmendments(p=>{const n=typeof fn==='function'?fn(p):fn;setTimeout(()=>FS.amendments(n),0);return n;});}
   function updTags(fn){setAuditTags(p=>{const n=typeof fn==='function'?fn(p):fn;setTimeout(()=>FS.tags(n),0);return n;});}
   function updEnrichments(fn){setEnrichments(p=>{const n=typeof fn==='function'?fn(p):fn;if(enrTimer.current)clearTimeout(enrTimer.current);enrTimer.current=setTimeout(()=>FS.enr(n),1500);return n;});}
