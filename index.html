@@ -718,9 +718,25 @@ function BudgetTab({txns,amendments,setAmendments}){
         </div>
       </div>
 
-      {!allYears&&chainRow&&chainRow.carryoverIn>0&&<Alert type="info"><strong>{selFY}</strong> includes <strong>{fmt(chainRow.carryoverIn)}</strong> carryover from prior-year underspend. Combined available: <strong>{fmt(chainRow.available)}</strong></Alert>}
+      {!allYears&&chainRow&&(()=>{
+        const overPlanAmt=totalActual-bud.contract;
+        const overAvailableAmt=totalActual-chainRow.available;
+        return(
+          <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+            {chainRow.carryoverIn>0&&<Alert type="info"><strong>{selFY}</strong> includes <strong>{fmt(chainRow.carryoverIn)}</strong> carryover from prior-year underspend. Combined available: <strong>{fmt(chainRow.available)}</strong></Alert>}
+            {overPlanAmt>0&&(
+              overAvailableAmt<=0?(
+                <Alert type="success">Actual spend of <strong>{fmt(totalActual)}</strong> is <strong>{fmt(overPlanAmt)}</strong> over the <strong>{fmt(bud.contract)}</strong> submitted budget plan — but this is fully covered by <strong>{fmt(chainRow.carryoverIn)}</strong> in carryover from prior-year underspend. Total spending remains within the <strong>{fmt(chainRow.available)}</strong> available for {selFY}. Category-level "over budget" flags below reflect the submitted plan only, not this carryover buffer.</Alert>
+              ):(
+                <Alert type="warn">Actual spend of <strong>{fmt(totalActual)}</strong> exceeds not just the {fmt(bud.contract)} submitted plan but the full <strong>{fmt(chainRow.available)}</strong> available for {selFY} (plan + carryover) by <strong>{fmt(overAvailableAmt)}</strong>. This is a genuine overage, not carryover coverage — worth review.</Alert>
+              )
+            )}
+          </div>
+        );
+      })()}
 
       {/* Single-year view */}
+      {!allYears&&<p style={{fontSize:'11px',color:'#94A3B8',margin:'0'}}>Category budgets below reflect the submitted plan only and do not include carryover — see the note above for how total-year spending compares once carryover is included.</p>}
       {!allYears&&<div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',overflow:'hidden'}}>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr>
@@ -1156,7 +1172,14 @@ function CarryoverTab({txns}){
   const chartData=rows.map(r=>({fy:r.fy,Contract:r.contract,Carryover:r.carryoverIn,'Actual Spend':Math.round(r.actual||0)}));
   const th={padding:'10px 16px',fontSize:'11px',fontWeight:'700',color:'#64748B',textTransform:'uppercase',letterSpacing:'0.05em',background:'#F8FAFC',borderBottom:'1px solid #E2E8F0'};
   const td={padding:'10px 16px',fontSize:'13px',color:'#334155',borderBottom:'1px solid #F8FAFC'};
+  // Signed formatter for this table specifically — a negative carryover here is
+  // a real deficit (spent more than the year's total available), not routine
+  // variance, so it needs an unambiguous minus sign rather than relying on
+  // color alone (fmt() strips signs by design for the lighter variance cells
+  // elsewhere in the app).
+  function fmtSigned(n){return n<0?'('+fmt(n)+')':fmt(n);}
   function noteFor(r,i){
+    if(r.carryoverOut<0) return `⚠ Actual spend exceeded this year's total available by ${fmt(r.carryoverOut)} — carried forward as a shortfall`;
     if(i===0) return 'First Allocation received upfront';
     if(r.isFuture) return `Projected — carries forward est. underspend from ${rows[i-1].fy}`;
     if(r.isCurrent) return `Current year — carryover in reflects actual ${rows[i-1].fy} underspend`;
@@ -1164,8 +1187,12 @@ function CarryoverTab({txns}){
   }
   return(
     <div style={{display:'flex',flexDirection:'column',gap:'20px'}}>
-      <Alert type="info">
-        <strong>{lastRow.fy} Projection:</strong> With {fmt(lastRow.carryoverIn)} carried in from prior-year underspend plus the {fmt(lastRow.contract)} {lastRow.fy} contract, up to <strong>{fmt(lastRow.available)}</strong> may be available for the final year. This figure updates automatically as real transactions post — it is not a fixed estimate.
+      <Alert type={lastRow.carryoverIn<0?"warn":"info"}>
+        {lastRow.carryoverIn<0?(
+          <><strong>{lastRow.fy} Projection:</strong> Prior-year spending carried in a <strong>{fmtSigned(lastRow.carryoverIn)}</strong> shortfall, reducing the {fmt(lastRow.contract)} {lastRow.fy} contract down to <strong>{fmt(lastRow.available)}</strong> total available for the final year.</>
+        ):(
+          <><strong>{lastRow.fy} Projection:</strong> With {fmt(lastRow.carryoverIn)} carried in from prior-year underspend plus the {fmt(lastRow.contract)} {lastRow.fy} contract, up to <strong>{fmt(lastRow.available)}</strong> may be available for the final year. This figure updates automatically as real transactions post — it is not a fixed estimate.</>
+        )}
       </Alert>
       <div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',overflow:'hidden'}}>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
@@ -1174,11 +1201,11 @@ function CarryoverTab({txns}){
             <tr key={r.fy} style={{background:r.isCurrent?'#EFF6FF':'white'}} onMouseOver={e=>e.currentTarget.style.background=r.isCurrent?'#DBEAFE':'#F8FAFC'} onMouseOut={e=>e.currentTarget.style.background=r.isCurrent?'#EFF6FF':'white'}>
               <td style={{...td,fontWeight:'700'}}>{r.fy}{r.isCurrent&&<span style={{marginLeft:'6px',fontSize:'10px',fontWeight:'700',color:'#1D4ED8'}}>CURRENT</span>}</td>
               <td style={{...td,textAlign:'right'}}>{fmt(r.contract)}</td>
-              <td style={{...td,textAlign:'right',color:'#D97706',fontWeight:'600'}}>{r.carryoverIn>0?fmt(r.carryoverIn):'--'}</td>
+              <td style={{...td,textAlign:'right',color:r.carryoverIn<0?'#DC2626':'#D97706',fontWeight:'600'}}>{r.carryoverIn!==0?fmtSigned(r.carryoverIn):'--'}</td>
               <td style={{...td,textAlign:'right',fontWeight:'700'}}>{fmt(r.available)}</td>
               <td style={{...td,textAlign:'right'}}>{r.actual>0?fmt(r.actual):<span style={{color:'#94A3B8',fontStyle:'italic'}}>none yet</span>}</td>
-              <td style={{...td,textAlign:'right',fontWeight:'700',color:r.carryoverOut>0?'#D97706':'#059669'}}>{fmt(r.carryoverOut)}</td>
-              <td style={{...td,fontSize:'12px',color:'#64748B'}}>{noteFor(r,i)}</td>
+              <td style={{...td,textAlign:'right',fontWeight:'700',color:r.carryoverOut<0?'#DC2626':r.carryoverOut>0?'#D97706':'#059669'}}>{fmtSigned(r.carryoverOut)}</td>
+              <td style={{...td,fontSize:'12px',color:r.carryoverOut<0?'#DC2626':'#64748B'}}>{noteFor(r,i)}</td>
             </tr>
           ))}</tbody>
         </table>
