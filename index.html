@@ -319,15 +319,32 @@ function SortIcon({col,sortCol,sortDir}){
 }
 
 // ── Overview Tab ─────────────────────────────────────────────────────────────
-function OverviewTab({txns,todos,setTodos,auditTags,userRole}){
+// ── Overview Tab ─────────────────────────────────────────────────────────────
+function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMembers,currentUid}){
   const [showAdd,setShowAdd]=useState(false);
   const [showDone,setShowDone]=useState(false);
   const [editId,setEditId]=useState(null);
+  const [assigneeFilter,setAssigneeFilter]=useState('all'); // 'all' | 'me' | 'unassigned'
   const [form,setForm]=useState({title:'',body:'',cat:'general',priority:'medium',assignedTo:'',dueDate:''});
   const [editForm,setEditForm]=useState({});
   const unverifiedCount=useMemo(()=>txns.filter(t=>{const tags=auditTags[t.id]||[];return!tags.includes('verified');}).length,[txns,auditTags]);
-  const active=todos.filter(t=>!t.done).sort((a,b)=>({high:0,medium:1,low:2}[a.priority]||1)-({high:0,medium:1,low:2}[b.priority]||1));
-  const done=todos.filter(t=>t.done);
+
+  const memberByUid=useMemo(()=>{const m={};(teamMembers||[]).forEach(u=>{m[u.uid]=u;});return m;},[teamMembers]);
+  function assigneeName(uid){if(!uid)return null;const u=memberByUid[uid];return u?(u.displayName||u.email):'Unknown user';}
+  function assigneePhoto(uid){const u=memberByUid[uid];return u?u.photoURL:null;}
+
+  const allActive=todos.filter(t=>!t.done).sort((a,b)=>({high:0,medium:1,low:2}[a.priority]||1)-({high:0,medium:1,low:2}[b.priority]||1));
+  const allDone=todos.filter(t=>t.done);
+  function applyAssigneeFilter(list){
+    if(assigneeFilter==='me') return list.filter(t=>t.assignedTo===currentUid);
+    if(assigneeFilter==='unassigned') return list.filter(t=>!t.assignedTo);
+    return list;
+  }
+  const active=applyAssigneeFilter(allActive);
+  const done=applyAssigneeFilter(allDone);
+  const myOpenCount=allActive.filter(t=>t.assignedTo===currentUid).length;
+  const unassignedOpenCount=allActive.filter(t=>!t.assignedTo).length;
+
   const priDot={high:'#EF4444',medium:'#F59E0B',low:'#94A3B8'};
   const today=new Date().toISOString().slice(0,10);
   function toggle(id){
@@ -343,32 +360,68 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole}){
   }
   function add(){
     if(!form.title.trim())return;
-    const newTodo={id:'u'+Date.now(),...form,done:false,createdAt:today};
-    setTodos(ts=>[...ts,newTodo]);
+    setTodos(ts=>[...ts,{id:'u'+Date.now(),...form,done:false,createdAt:today}]);
     logActivity('todo_added',`Added to-do: "${form.title}"`,{category:form.cat,priority:form.priority,assignedTo:form.assignedTo,dueDate:form.dueDate});
     setForm({title:'',body:'',cat:'general',priority:'medium',assignedTo:'',dueDate:''});setShowAdd(false);
   }
   function startEdit(t){setEditId(t.id);setEditForm({title:t.title,body:t.body||'',cat:t.cat||'general',priority:t.priority||'medium',assignedTo:t.assignedTo||'',dueDate:t.dueDate||''});}
   function saveEdit(){
-    const t=todos.find(x=>x.id===editId);
     setTodos(ts=>ts.map(x=>x.id===editId?{...x,...editForm}:x));
     logActivity('todo_edited',`Edited to-do: "${editForm.title}"`,{todoId:editId,changes:editForm});
     setEditId(null);
   }
   function isOverdue(t){return t.dueDate&&t.dueDate<today&&!t.done;}
-  const byFY={};txns.forEach(t=>{if(!byFY[t.fy])byFY[t.fy]={exp1:0,exp2:0,rev2:0};if(t.account==='0110029')byFY[t.fy].exp1+=t.amt;if(t.account==='0110238')byFY[t.fy].exp2+=t.amt;if(t.account==='0110237'&&t.sacs_group==='8xxx')byFY[t.fy].rev2+=t.amt;});
-  const fy=byFY['FY25/26']||{};const totalExp1=Object.values(byFY).reduce((s,f)=>s+(f.exp1||0),0);
+
+  const activeFY=currentFY();
+  const byFY={};
+  txns.forEach(t=>{if(!byFY[t.fy])byFY[t.fy]={exp1:0,exp2:0,rev2:0};if(t.account==='0110029')byFY[t.fy].exp1+=t.amt;if(t.account==='0110238')byFY[t.fy].exp2+=t.amt;if(t.account==='0110237'&&t.sacs_group==='8xxx')byFY[t.fy].rev2+=t.amt;});
+  const fy=byFY[activeFY]||{};
+  const totalExp1=Object.values(byFY).reduce((s,f)=>s+(f.exp1||0),0);
+
+  const curBudget=BUDGET[activeFY]||{};
+  const curContract=(curBudget.contract||0)+(curBudget.carryover||0);
+  const curSpentThisYear=fy.exp1||0;
+  const curUnspent=curContract-curSpentThisYear;
+
   const readyAmt=PAYMENTS.filter(p=>p.status==='ready').reduce((s,p)=>s+p.amt,0);
+  const readyCount=PAYMENTS.filter(p=>p.status==='ready').length;
+
+  const owedPayments=useMemo(()=>(payments||[]).filter(p=>p.fundingSource==='coe'&&p.status==='paid'&&p.coeReimbursement==='not_invoiced'),[payments]);
+  const owedAmt=owedPayments.reduce((s,p)=>s+(parseFloat(p.paidAmount||p.amount)||0),0);
+  const owedCount=owedPayments.length;
+
+  const timeline=FY_LIST.map(f=>{
+    const status=f<activeFY?'Complete':f===activeFY?'Active':'Upcoming';
+    const dot=f<activeFY?'#93C5FD':f===activeFY?'#34D399':'#D1D5DB';
+    return{fy:f,status,dot};
+  });
+
   const inpS={border:'1px solid #E2E8F0',borderRadius:'7px',padding:'7px 10px',fontSize:'13px'};
   const canEdit=userRole==='director'||userRole==='admin_support';
+
+  function AssigneeAvatar({uid,size}){
+    const s=size||18;
+    const photo=assigneePhoto(uid);
+    if(photo) return <img src={photo} alt="" style={{width:s,height:s,borderRadius:'50%',flexShrink:0}}/>;
+    return <div style={{width:s,height:s,borderRadius:'50%',background:'#E2E8F0',display:'flex',alignItems:'center',justifyContent:'center',fontSize:s*0.55,flexShrink:0}}>👤</div>;
+  }
+
   return(
     <div style={{display:'grid',gridTemplateColumns:'1fr 290px',gap:'22px'}}>
       <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:'10px'}}>
           <div><h2 style={{fontSize:'18px',fontWeight:'700',color:'#0F172A',margin:0}}>What needs your attention</h2>
-            <p style={{fontSize:'13px',color:'#64748B',margin:'4px 0 0'}}>{active.length+(unverifiedCount>0?1:0)} open · {done.length} completed</p></div>
+            <p style={{fontSize:'13px',color:'#64748B',margin:'4px 0 0'}}>{active.length+(unverifiedCount>0&&assigneeFilter==='all'?1:0)} open · {done.length} completed</p></div>
           {canEdit&&<button onClick={()=>setShowAdd(v=>!v)} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontWeight:'600',cursor:'pointer'}}>+ Add item</button>}
         </div>
+
+        {/* Assignee filter */}
+        <div style={{display:'flex',gap:'6px'}}>
+          {[['all','All',allActive.length],['me','Assigned to Me',myOpenCount],['unassigned','Unassigned',unassignedOpenCount]].map(([k,l,n])=>(
+            <button key={k} onClick={()=>setAssigneeFilter(k)} style={{padding:'6px 12px',borderRadius:'20px',fontSize:'12px',fontWeight:'600',border:'1px solid',cursor:'pointer',background:assigneeFilter===k?'#1E293B':'white',color:assigneeFilter===k?'white':'#64748B',borderColor:assigneeFilter===k?'#1E293B':'#E2E8F0',whiteSpace:'nowrap'}}>{l} ({n})</button>
+          ))}
+        </div>
+
         {showAdd&&canEdit&&(
           <div style={{background:'white',borderRadius:'12px',border:'1px solid #BFDBFE',padding:'16px',display:'flex',flexDirection:'column',gap:'10px'}}>
             <input value={form.title} onChange={e=>setForm(p=>({...p,title:e.target.value}))} placeholder="What needs to get done?" style={{...inpS,fontSize:'14px',fontWeight:'500'}}/>
@@ -376,7 +429,10 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole}){
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:'8px'}}>
               <select value={form.cat} onChange={e=>setForm(p=>({...p,cat:e.target.value}))} style={inpS}>{Object.entries(TODO_CATS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select>
               <select value={form.priority} onChange={e=>setForm(p=>({...p,priority:e.target.value}))} style={inpS}><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
-              <input value={form.assignedTo} onChange={e=>setForm(p=>({...p,assignedTo:e.target.value}))} placeholder="Assign to..." style={inpS}/>
+              <select value={form.assignedTo} onChange={e=>setForm(p=>({...p,assignedTo:e.target.value}))} style={inpS}>
+                <option value="">Unassigned</option>
+                {(teamMembers||[]).map(u=><option key={u.uid} value={u.uid}>{u.displayName||u.email}</option>)}
+              </select>
               <input type="date" value={form.dueDate} onChange={e=>setForm(p=>({...p,dueDate:e.target.value}))} style={inpS}/>
             </div>
             <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
@@ -385,15 +441,20 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole}){
             </div>
           </div>
         )}
-        {unverifiedCount>0&&(
+        {unverifiedCount>0&&assigneeFilter==='all'&&(
           <div style={{background:'#FFFBEB',borderRadius:'12px',border:'2px solid #FDE68A',padding:'14px 16px',display:'flex',gap:'14px',alignItems:'flex-start'}}>
             <span style={{fontSize:'20px',flexShrink:0}}>🔍</span>
             <div style={{flex:1}}><div style={{display:'flex',alignItems:'center',gap:'8px'}}><span style={{fontWeight:'700',color:'#92400E',fontSize:'14px'}}>{unverifiedCount.toLocaleString()} transactions need review</span><span style={{padding:'2px 8px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#FEF3C7',color:'#B45309'}}>Auto</span></div>
-              <p style={{fontSize:'13px',color:'#78350F',margin:'5px 0 0',lineHeight:'1.5'}}>Open <strong>Enrichment & Audit</strong>, filter by "Not Yet Enriched", and mark each transaction <strong>Verified</strong>. Clears automatically.</p>
+              <p style={{fontSize:'13px',color:'#78350F',margin:'5px 0 0',lineHeight:'1.5'}}>Open <strong>Data & Audit</strong>, filter by "Not Yet Enriched", and mark each transaction <strong>Verified</strong>. Clears automatically.</p>
             </div>
           </div>
         )}
-        {active.length===0&&unverifiedCount===0&&!showAdd&&<div style={{background:'white',borderRadius:'12px',border:'2px dashed #E2E8F0',padding:'40px',textAlign:'center'}}><div style={{fontSize:'28px',marginBottom:'8px'}}>✅</div><p style={{color:'#64748B',fontWeight:'500',margin:0}}>All caught up!</p></div>}
+        {active.length===0&&!(unverifiedCount>0&&assigneeFilter==='all')&&!showAdd&&(
+          <div style={{background:'white',borderRadius:'12px',border:'2px dashed #E2E8F0',padding:'40px',textAlign:'center'}}>
+            <div style={{fontSize:'28px',marginBottom:'8px'}}>✅</div>
+            <p style={{color:'#64748B',fontWeight:'500',margin:0}}>{assigneeFilter==='me'?'Nothing assigned to you right now.':assigneeFilter==='unassigned'?'Everything has an owner.':'All caught up!'}</p>
+          </div>
+        )}
         <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
           {active.map(todo=>{
             const cat=TODO_CATS[todo.cat]||TODO_CATS.general;const overdue=isOverdue(todo);
@@ -404,7 +465,10 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole}){
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:'8px'}}>
                   <select value={editForm.cat} onChange={e=>setEditForm(p=>({...p,cat:e.target.value}))} style={inpS}>{Object.entries(TODO_CATS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select>
                   <select value={editForm.priority} onChange={e=>setEditForm(p=>({...p,priority:e.target.value}))} style={inpS}><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
-                  <input value={editForm.assignedTo} onChange={e=>setEditForm(p=>({...p,assignedTo:e.target.value}))} placeholder="Assign to..." style={inpS}/>
+                  <select value={editForm.assignedTo} onChange={e=>setEditForm(p=>({...p,assignedTo:e.target.value}))} style={inpS}>
+                    <option value="">Unassigned</option>
+                    {(teamMembers||[]).map(u=><option key={u.uid} value={u.uid}>{u.displayName||u.email}</option>)}
+                  </select>
                   <input type="date" value={editForm.dueDate} onChange={e=>setEditForm(p=>({...p,dueDate:e.target.value}))} style={inpS}/>
                 </div>
                 <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
@@ -424,8 +488,14 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole}){
                     {overdue&&<span style={{padding:'2px 7px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#FEE2E2',color:'#991B1B'}}>Overdue</span>}
                   </div>
                   {todo.body&&<p style={{fontSize:'12px',color:'#64748B',margin:'4px 0 0',lineHeight:'1.5'}}>{todo.body}</p>}
-                  <div style={{display:'flex',gap:'12px',marginTop:'4px',flexWrap:'wrap'}}>
-                    {todo.assignedTo&&<span style={{fontSize:'11px',color:'#64748B'}}>👤 {todo.assignedTo}</span>}
+                  <div style={{display:'flex',alignItems:'center',gap:'12px',marginTop:'4px',flexWrap:'wrap'}}>
+                    {todo.assignedTo?(
+                      <span style={{display:'flex',alignItems:'center',gap:'5px',fontSize:'11px',color:'#64748B'}}>
+                        <AssigneeAvatar uid={todo.assignedTo} size={16}/> {assigneeName(todo.assignedTo)}
+                      </span>
+                    ):(
+                      <span style={{fontSize:'11px',color:'#CBD5E1',fontStyle:'italic'}}>Unassigned</span>
+                    )}
                     {todo.dueDate&&<span style={{fontSize:'11px',color:overdue?'#991B1B':'#64748B'}}>📅 Due {todo.dueDate}</span>}
                     <span style={{fontSize:'11px',color:'#CBD5E1'}}>Added {todo.createdAt}</span>
                   </div>
@@ -445,7 +515,7 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole}){
               <div key={todo.id} style={{background:'#F8FAFC',borderRadius:'10px',padding:'9px 14px',display:'flex',gap:'10px',alignItems:'center'}}>
                 {canEdit&&<button onClick={()=>toggle(todo.id)} style={{width:'18px',height:'18px',borderRadius:'3px',border:'none',background:'#10B981',color:'white',cursor:'pointer',fontSize:'11px',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center'}}>v</button>}
                 <span style={{fontSize:'12px',color:'#94A3B8',textDecoration:'line-through',flex:1}}>{todo.title}</span>
-                {todo.assignedTo&&<span style={{fontSize:'11px',color:'#CBD5E1'}}>👤 {todo.assignedTo}</span>}
+                {todo.assignedTo&&<span style={{display:'flex',alignItems:'center',gap:'4px',fontSize:'11px',color:'#CBD5E1'}}><AssigneeAvatar uid={todo.assignedTo} size={14}/>{assigneeName(todo.assignedTo)}</span>}
                 <span style={{fontSize:'11px',color:'#CBD5E1'}}>Done {todo.completedAt}</span>
                 {canEdit&&<button onClick={()=>del(todo.id)} style={{background:'none',border:'none',color:'#E2E8F0',cursor:'pointer',fontSize:'14px'}} onMouseOver={e=>e.target.style.color='#EF4444'} onMouseOut={e=>e.target.style.color='#E2E8F0'}>x</button>}
               </div>
@@ -454,24 +524,33 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole}){
         )}
       </div>
       <div style={{display:'flex',flexDirection:'column',gap:'11px'}}>
-        {readyAmt>0&&<div style={{background:'#1D4ED8',borderRadius:'12px',padding:'16px',color:'white'}}><div style={{fontSize:'10px',fontWeight:'700',opacity:.8,letterSpacing:'0.06em',marginBottom:'4px'}}>READY TO INVOICE</div><div style={{fontSize:'22px',fontWeight:'700'}}>{fmt(readyAmt)}</div><div style={{fontSize:'11px',opacity:.75,marginTop:'3px'}}>Payments 4, 5 & 6 — FY24/25</div></div>}
+        {readyAmt>0&&<div style={{background:'#1D4ED8',borderRadius:'12px',padding:'16px',color:'white'}}>
+          <div style={{fontSize:'10px',fontWeight:'700',opacity:.8,letterSpacing:'0.06em',marginBottom:'4px'}}>READY TO INVOICE — PRIMARY ALLOCATION</div>
+          <div style={{fontSize:'22px',fontWeight:'700'}}>{fmt(readyAmt)}</div>
+          <div style={{fontSize:'11px',opacity:.75,marginTop:'3px'}}>{readyCount} payment{readyCount!==1?'s':''} · spending triggers met</div>
+        </div>}
+        {owedAmt>0&&<div style={{background:'#92400E',borderRadius:'12px',padding:'16px',color:'white'}}>
+          <div style={{fontSize:'10px',fontWeight:'700',opacity:.85,letterSpacing:'0.06em',marginBottom:'4px'}}>OWED BY COE — PARTNER REIMBURSEMENTS</div>
+          <div style={{fontSize:'22px',fontWeight:'700'}}>{fmt(owedAmt)}</div>
+          <div style={{fontSize:'11px',opacity:.8,marginTop:'3px'}}>{owedCount} payment{owedCount!==1?'s':''} paid, not yet invoiced to COE</div>
+        </div>}
         <div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',padding:'14px'}}>
-          <div style={{fontSize:'10px',fontWeight:'700',color:'#64748B',letterSpacing:'0.06em',marginBottom:'10px'}}>PRIMARY ALLOCATION</div>
-          {[['Total contract','$502,280'],['Spent to date',fmt(totalExp1)],['FY25/26 spent',fmt(fy.exp1||0)],['Unspent this year',fmt(133941-(fy.exp1||0))]].map(([l,v],i)=>(
-            <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'3px 0',borderTop:i>0?'1px solid #F8FAFC':'none',fontSize:'12px'}}><span style={{color:'#64748B'}}>{l}</span><span style={{fontWeight:i===3?'700':'500',color:i===3?'#D97706':'#1E293B'}}>{v}</span></div>
+          <div style={{fontSize:'10px',fontWeight:'700',color:'#64748B',letterSpacing:'0.06em',marginBottom:'10px'}}>PRIMARY ALLOCATION — {activeFY}</div>
+          {[['Total contract (5 yrs)','$502,280'],['Spent to date',fmt(totalExp1)],[`${activeFY} budget available`,fmt(curContract)],[`${activeFY} spent`,fmt(curSpentThisYear)],['Unspent this year',fmt(curUnspent)]].map(([l,v],i)=>(
+            <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'3px 0',borderTop:i>0?'1px solid #F8FAFC':'none',fontSize:'12px'}}><span style={{color:'#64748B'}}>{l}</span><span style={{fontWeight:i===4?'700':'500',color:i===4?(curUnspent<0?'#DC2626':'#D97706'):'#1E293B'}}>{v}</span></div>
           ))}
         </div>
         <div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',padding:'14px'}}>
-          <div style={{fontSize:'10px',fontWeight:'700',color:'#64748B',letterSpacing:'0.06em',marginBottom:'10px'}}>COE REIMBURSEMENT (FY25/26)</div>
+          <div style={{fontSize:'10px',fontWeight:'700',color:'#64748B',letterSpacing:'0.06em',marginBottom:'10px'}}>COE REIMBURSEMENT ({activeFY})</div>
           {[['Revenue received',fmt(fy.rev2||0)],['Expenses paid out',fmt(fy.exp2||0)],['Net balance',fmt((fy.rev2||0)-(fy.exp2||0))]].map(([l,v],i)=>(
             <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'3px 0',borderTop:i>0?'1px solid #F8FAFC':'none',fontSize:'12px'}}><span style={{color:'#64748B'}}>{l}</span><span style={{fontWeight:i===2?'700':'500',color:i===2?((fy.rev2||0)-(fy.exp2||0)>=0?'#059669':'#DC2626'):'#1E293B'}}>{v}</span></div>
           ))}
         </div>
         <div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',padding:'14px'}}>
           <div style={{fontSize:'10px',fontWeight:'700',color:'#64748B',letterSpacing:'0.06em',marginBottom:'10px'}}>GRANT TIMELINE</div>
-          {[['FY23/24','Complete','#93C5FD'],['FY24/25','Complete','#93C5FD'],['FY25/26','Active','#34D399'],['FY26/27','Upcoming','#D1D5DB']].map(([fy,s,dot])=>(
-            <div key={fy} style={{display:'flex',alignItems:'center',gap:'7px',padding:'3px 0',fontSize:'12px'}}>
-              <span style={{display:'inline-block',width:'7px',height:'7px',borderRadius:'50%',background:dot,flexShrink:0}}/><span style={{color:'#334155'}}>{fy}</span><span style={{marginLeft:'auto',fontSize:'11px',color:'#94A3B8'}}>{s}</span>
+          {timeline.map(t=>(
+            <div key={t.fy} style={{display:'flex',alignItems:'center',gap:'7px',padding:'3px 0',fontSize:'12px'}}>
+              <span style={{display:'inline-block',width:'7px',height:'7px',borderRadius:'50%',background:t.dot,flexShrink:0}}/><span style={{color:'#334155',fontWeight:t.status==='Active'?'700':'400'}}>{t.fy}</span><span style={{marginLeft:'auto',fontSize:'11px',color:t.status==='Active'?'#059669':'#94A3B8',fontWeight:t.status==='Active'?'700':'400'}}>{t.status}</span>
             </div>
           ))}
         </div>
@@ -1413,6 +1492,46 @@ const PAY_TYPES=['Stipend','Travel','Services','Materials','Other'];
 const RECIP_TYPES=['LEA','COE','Individual','Vendor','Other'];
 const EMPTY_PAY={recipient:'',recipientType:'Individual',paymentType:'Services',description:'',amount:'',fundingSource:'primary',fyYear:'',agreementRef:'',expectedDate:'',txnId:'',paidDate:'',paidAmount:''};
 
+// ── Payment Form (standalone component — MUST be outside PartnerPaymentsTab) ──
+// Extracting this fixes a React bug where inline component definitions inside a
+// parent that re-renders on every keystroke get remounted, losing input focus.
+function PayForm({form,setForm,onSave,onCancel,saveLabel}){
+  const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'7px 10px',fontSize:'13px',width:'100%'};
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
+      <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr',gap:'10px'}}>
+        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Recipient Name *</label><input value={form.recipient} onChange={e=>setForm(p=>({...p,recipient:e.target.value}))} placeholder="Organization or individual name" style={inp}/></div>
+        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Recipient Type</label><select value={form.recipientType} onChange={e=>setForm(p=>({...p,recipientType:e.target.value}))} style={inp}>{RECIP_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
+        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Payment Type</label><select value={form.paymentType} onChange={e=>setForm(p=>({...p,paymentType:e.target.value}))} style={inp}>{PAY_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
+      </div>
+      <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Description / Purpose *</label><textarea value={form.description} onChange={e=>setForm(p=>({...p,description:e.target.value}))} placeholder="Describe what this payment is for..." rows={2} style={{...inp,resize:'none'}}/></div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:'10px'}}>
+        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Expected Amount *</label><input type="number" value={form.amount} onChange={e=>setForm(p=>({...p,amount:e.target.value}))} placeholder="0.00" style={inp}/></div>
+        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Funding Source</label><select value={form.fundingSource} onChange={e=>setForm(p=>({...p,fundingSource:e.target.value}))} style={inp}><option value="primary">Primary Allocation</option><option value="coe">COE Reimbursement</option></select></div>
+        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Fiscal Year</label><select value={form.fyYear} onChange={e=>setForm(p=>({...p,fyYear:e.target.value}))} style={inp}>{FY_LIST.map(f=><option key={f} value={f}>{f}</option>)}</select></div>
+        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Agreement Ref #</label><input value={form.agreementRef} onChange={e=>setForm(p=>({...p,agreementRef:e.target.value}))} placeholder="MOU #, PO #, etc." style={inp}/></div>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:'10px'}}>
+        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Expected Pay Date</label><input type="date" value={form.expectedDate} onChange={e=>setForm(p=>({...p,expectedDate:e.target.value}))} style={inp}/></div>
+        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Actual Pay Date</label><input type="date" value={form.paidDate} onChange={e=>setForm(p=>({...p,paidDate:e.target.value}))} style={inp}/></div>
+        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Actual Amount Paid</label><input type="number" value={form.paidAmount} onChange={e=>setForm(p=>({...p,paidAmount:e.target.value}))} placeholder="0.00" style={inp}/></div>
+        <div><label style={{display:'block',fontSize:'11px',color:'#059669',fontWeight:'600',marginBottom:'3px'}}>Ledger Txn ID</label><input value={form.txnId} onChange={e=>setForm(p=>({...p,txnId:e.target.value}))} placeholder="Link to ledger entry" style={{...inp,background:'#ECFDF5',borderColor:'#A7F3D0'}}/></div>
+      </div>
+      <div style={{display:'flex',gap:'8px',justifyContent:'flex-end',paddingTop:'4px'}}>
+        <button onClick={onCancel} style={{border:'1px solid #E2E8F0',background:'white',borderRadius:'8px',padding:'8px 16px',cursor:'pointer',color:'#64748B',fontSize:'13px'}}>Cancel</button>
+        <button onClick={onSave} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontWeight:'600',cursor:'pointer',fontSize:'13px'}}>{saveLabel}</button>
+      </div>
+    </div>
+  );
+}
+
+// ── COE Reimbursement statuses (tracked separately from partner payment lifecycle) ──
+const COE_REIMB_STATUSES={
+  not_invoiced:{label:'Not Yet Invoiced to COE',color:'#DC2626',bg:'#FEE2E2'},
+  invoiced:    {label:'Invoiced — Awaiting Reimbursement',color:'#D97706',bg:'#FEF3C7'},
+  received:    {label:'Reimbursement Received',color:'#059669',bg:'#D1FAE5'},
+};
+
 function PartnerPaymentsTab({payments,userRole}){
   const canManage=userRole==='director'||userRole==='admin_support';
   const [filterSource,setFilterSource]=useState('');
@@ -1440,8 +1559,9 @@ function PartnerPaymentsTab({payments,userRole}){
   },[payments,search,filterSource,filterStatus,filterType,filterFY]);
 
   const totalAmt=payments.reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
-  const unpaidAmt=payments.filter(p=>p.status!=='paid').reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
-  const unpaidN=payments.filter(p=>p.status!=='paid').length;
+  const outstanding=payments.filter(p=>p.status!=='paid');
+  const unpaidAmt=outstanding.reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
+  const unpaidN=outstanding.length;
   const paidAmt=payments.filter(p=>p.status==='paid').reduce((s,p)=>s+(parseFloat(p.paidAmount||p.amount)||0),0);
 
   async function handleAdd(){
@@ -1449,6 +1569,7 @@ function PartnerPaymentsTab({payments,userRole}){
     const u=_auth.currentUser;if(!u) return;
     const id='p'+Date.now();const now=new Date().toISOString().slice(0,10);
     await FS.payment(id,{...form,id,amount:parseFloat(form.amount)||0,paidAmount:parseFloat(form.paidAmount)||0,status:'draft',
+      coeReimbursement:form.fundingSource==='coe'?'not_invoiced':null,
       statusHistory:[{status:'draft',note:'Payment record created',updatedBy:u.displayName||u.email,updatedAt:now}],
       notes:[],createdAt:now,createdBy:u.displayName||u.email,createdByEmail:u.email});
     logActivity('payment_added',`Added payment: "${form.recipient}" — ${fmt(parseFloat(form.amount)||0)}`,{type:form.paymentType,source:form.fundingSource});
@@ -1471,10 +1592,23 @@ function PartnerPaymentsTab({payments,userRole}){
     const now=new Date().toISOString().slice(0,10);
     const newHist=[...(p.statusHistory||[]),{status:statusForm.status,note:statusForm.note,updatedBy:u.displayName||u.email,updatedAt:now}];
     const upd={status:statusForm.status,statusHistory:newHist};
-    if(statusForm.status==='paid') upd.paidDate=upd.paidDate||now;
+    if(statusForm.status==='paid'){
+      upd.paidDate=upd.paidDate||now;
+      // Initialize COE reimbursement tracking the moment a COE-funded payment is marked Paid
+      if(p.fundingSource==='coe'&&!p.coeReimbursement) upd.coeReimbursement='not_invoiced';
+    }
     await FS.paymentUpdate(p.id,upd);
     logActivity('payment_status',`"${p.recipient}" → ${PAY_STATUSES[statusForm.status]?.label}`,{id:p.id,status:statusForm.status,note:statusForm.note});
     setStatusEditId(null);setStatusForm({status:'',note:''});
+  }
+  async function handleCoeReimbUpdate(p,newStatus){
+    const u=_auth.currentUser;if(!u) return;
+    const now=new Date().toISOString().slice(0,10);
+    const upd={coeReimbursement:newStatus};
+    if(newStatus==='invoiced') upd.coeInvoicedDate=now;
+    if(newStatus==='received') upd.coeReceivedDate=now;
+    await FS.paymentUpdate(p.id,upd);
+    logActivity('coe_reimb_status',`"${p.recipient}" reimbursement → ${COE_REIMB_STATUSES[newStatus]?.label}`,{id:p.id,status:newStatus});
   }
   async function handleAddNote(p){
     if(!noteText.trim()) return;
@@ -1490,35 +1624,6 @@ function PartnerPaymentsTab({payments,userRole}){
   const srcLabel={primary:'Primary Allocation',coe:'COE Reimbursement'};
   const srcColor={primary:{bg:'#DBEAFE',c:'#1D4ED8'},coe:{bg:'#FEF3C7',c:'#92400E'}};
 
-  function PayForm({onSave,onCancel,saveLabel}){
-    return(
-      <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
-        <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr',gap:'10px'}}>
-          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Recipient Name *</label><input value={form.recipient} onChange={e=>setForm(p=>({...p,recipient:e.target.value}))} placeholder="Organization or individual name" style={inp}/></div>
-          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Recipient Type</label><select value={form.recipientType} onChange={e=>setForm(p=>({...p,recipientType:e.target.value}))} style={inp}>{RECIP_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
-          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Payment Type</label><select value={form.paymentType} onChange={e=>setForm(p=>({...p,paymentType:e.target.value}))} style={inp}>{PAY_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
-        </div>
-        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Description / Purpose *</label><textarea value={form.description} onChange={e=>setForm(p=>({...p,description:e.target.value}))} placeholder="Describe what this payment is for..." rows={2} style={{...inp,resize:'none'}}/></div>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:'10px'}}>
-          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Expected Amount *</label><input type="number" value={form.amount} onChange={e=>setForm(p=>({...p,amount:e.target.value}))} placeholder="0.00" style={inp}/></div>
-          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Funding Source</label><select value={form.fundingSource} onChange={e=>setForm(p=>({...p,fundingSource:e.target.value}))} style={inp}><option value="primary">Primary Allocation</option><option value="coe">COE Reimbursement</option></select></div>
-          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Fiscal Year</label><select value={form.fyYear} onChange={e=>setForm(p=>({...p,fyYear:e.target.value}))} style={inp}>{FY_LIST.map(f=><option key={f} value={f}>{f}</option>)}</select></div>
-          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Agreement Ref #</label><input value={form.agreementRef} onChange={e=>setForm(p=>({...p,agreementRef:e.target.value}))} placeholder="MOU #, PO #, etc." style={inp}/></div>
-        </div>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:'10px'}}>
-          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Expected Pay Date</label><input type="date" value={form.expectedDate} onChange={e=>setForm(p=>({...p,expectedDate:e.target.value}))} style={inp}/></div>
-          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Actual Pay Date</label><input type="date" value={form.paidDate} onChange={e=>setForm(p=>({...p,paidDate:e.target.value}))} style={inp}/></div>
-          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Actual Amount Paid</label><input type="number" value={form.paidAmount} onChange={e=>setForm(p=>({...p,paidAmount:e.target.value}))} placeholder="0.00" style={inp}/></div>
-          <div><label style={{display:'block',fontSize:'11px',color:'#059669',fontWeight:'600',marginBottom:'3px'}}>Ledger Txn ID</label><input value={form.txnId} onChange={e=>setForm(p=>({...p,txnId:e.target.value}))} placeholder="Link to ledger entry" style={{...inp,background:'#ECFDF5',borderColor:'#A7F3D0'}}/></div>
-        </div>
-        <div style={{display:'flex',gap:'8px',justifyContent:'flex-end',paddingTop:'4px'}}>
-          <button onClick={onCancel} style={{border:'1px solid #E2E8F0',background:'white',borderRadius:'8px',padding:'8px 16px',cursor:'pointer',color:'#64748B',fontSize:'13px'}}>Cancel</button>
-          <button onClick={onSave} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontWeight:'600',cursor:'pointer',fontSize:'13px'}}>{saveLabel}</button>
-        </div>
-      </div>
-    );
-  }
-
   return(
     <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
       {/* Summary */}
@@ -1527,6 +1632,26 @@ function PartnerPaymentsTab({payments,userRole}){
         <KpiCard label="Outstanding" value={fmt(unpaidAmt)} sub={unpaidN+' not yet paid'} color="#DC2626" accent="#DC2626"/>
         <KpiCard label="Paid" value={fmt(paidAmt)} sub={payments.filter(p=>p.status==='paid').length+' completed'} color="#059669" accent="#059669"/>
       </div>
+
+      {/* Outstanding payments banner — quick-glance summary of what still needs to be processed */}
+      {unpaidN>0&&(
+        <div style={{background:'#FEF2F2',border:'2px solid #FECACA',borderRadius:'12px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'14px'}}>
+          <span style={{fontSize:'22px',flexShrink:0}}>⏳</span>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:'700',color:'#991B1B',fontSize:'14px'}}>{unpaidN} partner payment{unpaidN!==1?'s':''} still need{unpaidN===1?'s':''} to be processed</div>
+            <div style={{fontSize:'12px',color:'#B91C1C',marginTop:'3px',display:'flex',gap:'14px',flexWrap:'wrap'}}>
+              {STATUS_ORDER.filter(s=>s!=='paid').map(s=>{
+                const n=outstanding.filter(p=>p.status===s).length;
+                return n>0?<span key={s}>{n} {PAY_STATUSES[s].label}</span>:null;
+              })}
+            </div>
+          </div>
+          <div style={{textAlign:'right',flexShrink:0}}>
+            <div style={{fontSize:'22px',fontWeight:'700',color:'#991B1B'}}>{fmt(unpaidAmt)}</div>
+            <div style={{fontSize:'11px',color:'#B91C1C'}}>total outstanding</div>
+          </div>
+        </div>
+      )}
 
       {/* Filters + Add */}
       <div style={{display:'flex',gap:'8px',flexWrap:'wrap',alignItems:'center'}}>
@@ -1542,7 +1667,7 @@ function PartnerPaymentsTab({payments,userRole}){
       {showAdd&&canManage&&(
         <div style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
           <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>New Payment Record</div>
-          <PayForm onSave={handleAdd} onCancel={()=>setShowAdd(false)} saveLabel="Create Payment"/>
+          <PayForm form={form} setForm={setForm} onSave={handleAdd} onCancel={()=>setShowAdd(false)} saveLabel="Create Payment"/>
         </div>
       )}
 
@@ -1558,11 +1683,12 @@ function PartnerPaymentsTab({payments,userRole}){
           const isEditing=editId===p.id;
           const isStatusEdit=statusEditId===p.id;
           const curStep=PAY_STATUSES[p.status]?.step||0;
+          const crs=p.coeReimbursement?COE_REIMB_STATUSES[p.coeReimbursement]:null;
 
           if(isEditing) return(
             <div key={p.id} style={{background:'#EFF6FF',border:'2px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
               <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>Editing: {p.recipient}</div>
-              <PayForm onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes"/>
+              <PayForm form={form} setForm={setForm} onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes"/>
             </div>
           );
 
@@ -1577,6 +1703,7 @@ function PartnerPaymentsTab({payments,userRole}){
                     <span style={{padding:'2px 7px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#F3F4F6',color:'#374151'}}>{p.paymentType}</span>
                     <span style={{padding:'2px 7px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:sc.bg,color:sc.c}}>{srcLabel[p.fundingSource]||p.fundingSource}</span>
                     <span style={{fontSize:'11px',color:'#94A3B8'}}>{p.fyYear}</span>
+                    {crs&&<span style={{padding:'2px 7px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:crs.bg,color:crs.color}}>{crs.label}</span>}
                   </div>
                   <div style={{fontSize:'13px',color:'#475569',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'500px'}}>{p.description}</div>
                   {(p.notes||[]).length>0&&<div style={{fontSize:'11px',color:'#94A3B8',marginTop:'4px'}}>{p.notes.length} note{p.notes.length!==1?'s':''}</div>}
@@ -1613,6 +1740,20 @@ function PartnerPaymentsTab({payments,userRole}){
                       <div key={l}><div style={{fontSize:'10px',color:'#94A3B8',fontWeight:'600',marginBottom:'2px'}}>{l}</div><div style={{fontSize:'12px',fontWeight:'600',color:v==='—'?'#CBD5E1':'#1E293B',fontFamily:l==='Ledger Txn ID'?'monospace':'inherit'}}>{v}</div></div>
                     ))}
                   </div>
+
+                  {/* COE Reimbursement tracker — only for paid, COE-funded payments */}
+                  {p.fundingSource==='coe'&&p.status==='paid'&&(
+                    <div style={{background:'#FFFBEB',border:'1px solid #FDE68A',borderRadius:'10px',padding:'14px'}}>
+                      <div style={{fontWeight:'700',color:'#92400E',fontSize:'12px',marginBottom:'8px',letterSpacing:'0.03em',textTransform:'uppercase'}}>COE Reimbursement Status</div>
+                      <div style={{display:'flex',alignItems:'center',gap:'10px',flexWrap:'wrap'}}>
+                        <span style={{padding:'4px 12px',borderRadius:'20px',fontSize:'12px',fontWeight:'700',background:crs?crs.bg:COE_REIMB_STATUSES.not_invoiced.bg,color:crs?crs.color:COE_REIMB_STATUSES.not_invoiced.color}}>{crs?crs.label:COE_REIMB_STATUSES.not_invoiced.label}</span>
+                        {canManage&&p.coeReimbursement!=='invoiced'&&p.coeReimbursement!=='received'&&<button onClick={()=>handleCoeReimbUpdate(p,'invoiced')} style={{background:'#D97706',color:'white',border:'none',borderRadius:'7px',padding:'6px 12px',fontSize:'12px',fontWeight:'600',cursor:'pointer'}}>Mark Invoiced →</button>}
+                        {canManage&&p.coeReimbursement==='invoiced'&&<button onClick={()=>handleCoeReimbUpdate(p,'received')} style={{background:'#059669',color:'white',border:'none',borderRadius:'7px',padding:'6px 12px',fontSize:'12px',fontWeight:'600',cursor:'pointer'}}>Mark Reimbursement Received →</button>}
+                        {p.coeInvoicedDate&&<span style={{fontSize:'11px',color:'#92400E'}}>Invoiced {p.coeInvoicedDate}</span>}
+                        {p.coeReceivedDate&&<span style={{fontSize:'11px',color:'#059669'}}>Received {p.coeReceivedDate}</span>}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Status update */}
                   {canManage&&p.status!=='paid'&&(
@@ -1699,7 +1840,6 @@ function PartnerPaymentsTab({payments,userRole}){
     </div>
   );
 }
-
 
 // ── Activity Log Tab (Director only) ─────────────────────────────────────────
 function LogTab({logs}){
@@ -1836,6 +1976,7 @@ function App(){
   const [dataLoading,setDataLoading]=useState(true);
   const [showTeamPanel,setShowTeamPanel]=useState(false);
   const [activityLogs,setActivityLogs]=useState([]);
+  const [teamMembers,setTeamMembers]=useState([]);
 
   const [transactions,setTransactions]=useState([]);
   const [txnLoading,setTxnLoading]=useState(true);
@@ -1889,6 +2030,15 @@ function App(){
     return _db.collection('activityLog').orderBy('timestamp','desc').limit(500)
       .onSnapshot(s=>setActivityLogs(s.docs.map(d=>({id:d.id,...d.data()}))));
   },[userRole]);
+
+  // Team member directory — powers the "Assign to" dropdown on Overview to-dos.
+  // Available to all roles (not gated) since anyone can view assignments.
+  useEffect(()=>{
+    if(!user)return;
+    return _db.collection('users').onSnapshot(s=>{
+      setTeamMembers(s.docs.map(d=>({uid:d.id,...d.data()})).sort((a,b)=>(a.displayName||a.email||'').localeCompare(b.displayName||b.email||'')));
+    },e=>console.error('Team members:',e));
+  },[user]);
 
   function updTodos(fn){setTodos(p=>{const n=typeof fn==='function'?fn(p):fn;setTimeout(()=>FS.todos(n),0);return n;});}
   function updEvents(fn){setEvents(p=>{const n=typeof fn==='function'?fn(p):fn;setTimeout(()=>FS.events(n),0);return n;});}
@@ -1973,7 +2123,7 @@ function App(){
           </div>
         </div>
         <div style={{flex:1,overflowY:'auto',padding:'24px'}}>
-          {activeTab==='overview'  &&<OverviewTab    txns={transactions} todos={todos} setTodos={updTodos} auditTags={auditTags} userRole={userRole}/>}
+          {activeTab==='overview'  &&<OverviewTab    txns={transactions} todos={todos} setTodos={updTodos} auditTags={auditTags} userRole={userRole} payments={payments} teamMembers={teamMembers} currentUid={user.uid}/>}
           {activeTab==='fiscal'    &&<FiscalHealthTab txns={transactions} amendments={amendments} setAmendments={updAmendments}/>}
           {activeTab==='payments'  &&<PartnerPaymentsTab payments={payments} userRole={userRole}/>}
           {activeTab==='dataaudit' &&<DataAuditTab   txns={transactions} enrichments={enrichments} setEnrichments={updEnrichments} auditTags={auditTags} setAuditTags={updTags} jumpToId={jumpToId} clearJump={()=>setJumpToId(null)} initialView={dataAuditView} onViewChange={setDataAuditView} onJumpToEnrich={jumpToEnrich}/>}
