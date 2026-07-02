@@ -58,6 +58,19 @@ function saveEventHistory(action,snapshot){
   }).catch(function(e){console.warn('Event history error:',e);});
 }
 
+// ── DEFERRED HARDENING NOTES (future session — agreed 2026-07) ────────────────
+// D2 (concurrency): auditTags + enrichments are single shared blob docs
+//   rewritten wholesale on every change; simultaneous edits by two users can
+//   silently clobber each other (enrichment 1.5s debounce widens the window).
+//   Plan: migrate to per-transaction docs in a `txnMeta/{txnId}` collection
+//   (separate from /transactions so Full Replace never destroys audit work).
+//   Requires: one-time migration of blob data, new listeners, rules update,
+//   count verification before/after. Move todos to per-doc while at it.
+// D3 (scaling): same blobs approach Firestore's 1MB doc limit as enrichment
+//   text grows across 1,600+ txns. Fully resolved by the D2 migration.
+// D4 (retention): eventHistory snapshots currently cover payment edit/delete
+//   only. After D2, extend to to-do deletions and audit-tag removals
+//   (destructive ops only — not every enrichment keystroke).
 const FS = {
   payment:       (id,data) => _db.collection('payments').doc(id).set(data).catch(e=>{console.error(e);throw e;}),
   paymentUpdate: (id,data) => _db.collection('payments').doc(id).update(data).catch(e=>{console.error(e);throw e;}),
@@ -165,6 +178,12 @@ function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(err){}}
 
 // Current fiscal year (auto-detect)
 function currentFY(){const n=new Date();const yr=n.getFullYear();const mo=n.getMonth()+1;return mo<7?`FY${String(yr-1).slice(-2)}/${String(yr).slice(-2)}`:`FY${String(yr).slice(-2)}/${String(yr+1).slice(-2)}`;}
+// Grant runs through the final FY in FY_LIST. Once the calendar passes it,
+// activeGrantFY() clamps to the final grant year so displays keep showing the
+// last real year instead of an FY that has no budget or data. If the grant is
+// extended, adding the new year to FY_LIST + BUDGET is the only change needed.
+function activeGrantFY(){const c=currentFY();const last=FY_LIST[FY_LIST.length-1];return c>last?last:c;}
+function grantEnded(){return currentFY()>FY_LIST[FY_LIST.length-1];}
 
 // Role system
 const ROLES={director:'Director',admin_support:'Admin Support',team_member:'Team Member'};
@@ -223,15 +242,15 @@ const BUDGET_TOTAL_CONTRACT=Object.values(BUDGET).reduce((s,b)=>s+(b.contract||0
 const CONTRACT_TOTAL_MATCHES=Math.abs(CONTRACT_TOTAL_DISPLAY-BUDGET_TOTAL_CONTRACT)<0.01;
 
 const PAYMENTS=[
-  {n:1,alloc:"First", fy:"FY23/24",amt:133941.00,trigger:"100% upfront",status:"received"},
-  {n:2,alloc:"Second",fy:"FY24/25",amt:66970.50, trigger:"75% of Pmt 1 spent ($100,456)",status:"received"},
-  {n:3,alloc:"Second",fy:"FY24/25",amt:33485.25, trigger:"75% of Pmt 2 spent ($50,228)",status:"received"},
-  {n:4,alloc:"Second",fy:"FY24/25",amt:33485.25, trigger:"75% of Pmt 3 spent ($25,114)",status:"received"},
-  {n:5,alloc:"Third", fy:"FY25/26",amt:66970.50, trigger:"75% of Pmt 4 spent ($25,114)",status:"ready"},
-  {n:6,alloc:"Third", fy:"FY25/26",amt:33485.25, trigger:"75% of Pmt 5 spent ($50,228)",status:"ready"},
-  {n:7,alloc:"Third", fy:"FY25/26",amt:33485.25, trigger:"75% of Pmt 6 spent ($25,114)",status:"ready"},
-  {n:8,alloc:"Fourth",fy:"FY26/27",amt:50228.50, trigger:"75% of Pmt 7 spent ($25,114)",status:"ready"},
-  {n:9,alloc:"Fourth",fy:"FY26/27",amt:50228.50, trigger:"Final expense report approved",status:"ready"},
+  {n:1,alloc:"First", fy:"FY23/24",amt:133941.00,triggerType:'upfront',triggerAmt:0,     trigger:"100% upfront",status:"received"},
+  {n:2,alloc:"Second",fy:"FY24/25",amt:66970.50, triggerType:'spend',  triggerAmt:100456,trigger:"75% of Pmt 1 spent ($100,456)",status:"received"},
+  {n:3,alloc:"Second",fy:"FY24/25",amt:33485.25, triggerType:'spend',  triggerAmt:50228, trigger:"75% of Pmt 2 spent ($50,228)",status:"received"},
+  {n:4,alloc:"Second",fy:"FY24/25",amt:33485.25, triggerType:'spend',  triggerAmt:25114, trigger:"75% of Pmt 3 spent ($25,114)",status:"ready"},
+  {n:5,alloc:"Third", fy:"FY25/26",amt:66970.50, triggerType:'spend',  triggerAmt:25114, trigger:"75% of Pmt 4 spent ($25,114)",status:"ready"},
+  {n:6,alloc:"Third", fy:"FY25/26",amt:33485.25, triggerType:'spend',  triggerAmt:50228, trigger:"75% of Pmt 5 spent ($50,228)",status:"ready"},
+  {n:7,alloc:"Third", fy:"FY25/26",amt:33485.25, triggerType:'spend',  triggerAmt:25114, trigger:"75% of Pmt 6 spent ($25,114)",status:"ready"},
+  {n:8,alloc:"Fourth",fy:"FY26/27",amt:50228.50, triggerType:'spend',  triggerAmt:25114, trigger:"75% of Pmt 7 spent ($25,114)",status:"ready"},
+  {n:9,alloc:"Fourth",fy:"FY26/27",amt:50228.50, triggerType:'report', triggerAmt:0,     trigger:"Final expense report approved",status:"pending"},
 ];
 
 // ── Shared fiscal calculations — single source of truth for carryover ────────
@@ -246,7 +265,7 @@ function computeFiscalChain(txns){
       actualByFY[t.fy]=(actualByFY[t.fy]||0)+t.amt;
     }
   });
-  const nowFY=currentFY();
+  const nowFY=activeGrantFY();
   let carryIn=0;
   return FY_LIST.map(fy=>{
     const b=BUDGET[fy]||{contract:0};
@@ -273,11 +292,18 @@ function computeCoeNetPosition(txns){
 }
 
 // ── Payment trigger auto-detection ────────────────────────────────────────────
-// Each trigger threshold ($ amount in parens in PAYMENTS[].trigger) represents
-// 75% of the PRIOR payment's amount. We parse those out and compare against
+// Each trigger threshold lives in the structured triggerAmt field (the trigger
+// text is display-only and safe to reword). Thresholds are 75% of the PRIOR
+// payment's amount. We compare against
 // real cumulative primary-allocation spend (0110029+0110030) and real
-// cumulative cash received (0110028, AR/CR transactions only — JE entries are
-// accounting accruals, not real cash) to auto-detect status.
+// cumulative allocation cash received to auto-detect status.
+// CASH FILTER (confirmed 2026-07): main allocation payments arrive as CR
+// "DEPOSITS" entries in 0110028 (e.g. Pmt 1 on 6/28/2024, Pmts 2+3 combined
+// from San Joaquin COE on 6/30/2026). AR entries in 0110028 are OTHER revenue
+// (registrations, misc receivables, and known mispostings that belong in
+// 0110237) — they are EXCLUDED here and are pending journal-entry corrections
+// in the source ledger. Re-verify this pattern when the next allocation
+// payment lands.
 // NOTE: we deliberately do NOT silently overwrite the manually-recorded status
 // on PAYMENTS — real-world cash timing (partial deposits, misposted entries,
 // combined payments) can't always be reconstructed perfectly from ledger sums
@@ -285,17 +311,17 @@ function computeCoeNetPosition(txns){
 // with the recorded status, so a human can confirm rather than auto-trusting
 // a formula on compliance-sensitive figures.
 function computePaymentReconciliation(txns){
-  const cashReceived=txns.filter(t=>t.account==='0110028'&&t.sacs_group==='8xxx'&&(t.type==='AR'||t.type==='CR')).reduce((s,t)=>s+t.amt,0);
+  const cashReceived=txns.filter(t=>t.account==='0110028'&&t.sacs_group==='8xxx'&&t.type==='CR').reduce((s,t)=>s+t.amt,0);
   const primarySpend=txns.filter(t=>t.account==='0110029'||t.account==='0110030').reduce((s,t)=>s+t.amt,0);
   let cumPayments=0,cumTrigger=0;
   return PAYMENTS.map((p,i)=>{
     cumPayments+=p.amt;
-    const m=p.trigger.match(/\$([\d,]+)/);
-    const triggerAmt=m?parseFloat(m[1].replace(/,/g,'')):0;
-    if(i>0) cumTrigger+=triggerAmt;
+    if(i>0&&p.triggerType==='spend') cumTrigger+=p.triggerAmt||0;
     const cashCovers=cashReceived>=cumPayments;
     const triggerMet=primarySpend>=cumTrigger;
-    const estimatedStatus=cashCovers?'received':triggerMet?'ready':'pending';
+    // Report-triggered payments (e.g. Pmt 9, final expense report) never
+    // auto-advance to 'ready' on spend alone — approval is a human milestone.
+    const estimatedStatus=cashCovers?'received':(p.triggerType==='report'?'pending':(triggerMet?'ready':'pending'));
     return{...p,cumPayments,cumTrigger,estimatedStatus,mismatch:estimatedStatus!==p.status&&!(estimatedStatus==='ready'&&p.status==='future')&&!(estimatedStatus==='pending'&&p.status==='future')};
   });
 }
@@ -317,19 +343,18 @@ const TODO_CATS={
   general:{label:"General",color:"#374151",bg:"#F3F4F6"},
 };
 
-const INITIAL_TODOS=[
-  {id:"t1",title:"Submit invoices for Payments 4, 5, and 6",body:"Payments 4–6 total $133,941 and are ready to invoice — this is the full FY24/25 primary allocation. All spending triggers have been met.",cat:"invoicing",priority:"high",done:false,createdAt:"2026-06-25"},
-  {id:"t2",title:"Correct $30,000 deposit from 0110028 to 0110237",body:"A $30,000 cash payment received 6/4/2026 was deposited into Main Grant Revenue (0110028) but belongs in Reimbursed Revenue (0110237). Contact accounting to reclassify.",cat:"correction",priority:"high",done:false,createdAt:"2026-06-25"},
-  {id:"t3",title:"Clarify how indirect costs (7000s) are being charged",body:"Each Action Plan budgets ~$11,400/year in indirect costs (9.32–9.34% OCDE rate), but $0 appears in the ledger across all three years. Ask accounting.",cat:"documentation",priority:"medium",done:false,createdAt:"2026-06-25"},
-  {id:"t4",title:"Confirm FY24/25 budget amendment documentation",body:"FY24/25 shows $86,100 in consultants and $28,236 in travel — neither appeared in Plan B. Contract requires amendments for >10% variance.",cat:"documentation",priority:"medium",done:false,createdAt:"2026-06-25"},
-  {id:"t5",title:"Await approval of Payment 7 ($33,485)",body:"The 7th primary allocation payment is pending central COE approval. Submit invoice promptly once approved.",cat:"invoicing",priority:"low",done:false,createdAt:"2026-06-25"},
-  {id:"t6",title:"Invoice COE partners for FY25/26 reimbursements",body:"Review services provided to San Joaquin (Science), Santa Barbara (Math), and Monterey (CS) COEs and ensure all have been invoiced.",cat:"followup",priority:"medium",done:false,createdAt:"2026-06-25"},
-];
+// Seed list intentionally empty — real to-dos live in Firestore. A stale seed
+// here would resurrect outdated action items if the todos doc were ever reset.
+const INITIAL_TODOS=[];
 
 const FY_LIST=["FY23/24","FY24/25","FY25/26","FY26/27"];
 const SACS_OPTS=[["","All SACS"],["1000s","1000s — Cert. Salaries"],["2000s","2000s — Class. Salaries"],["3000s","3000s — Benefits"],["4000s","4000s — Books & Supplies"],["5000s","5000s — Services"],["5200s","5200s — Travel & Conf."],["7000s","7000s — Indirect"],["8xxx","8xxx — Revenue"],["9xxx","9xxx — Bal. Sheet"]];
 
 const fmt=n=>"$"+Math.abs(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+// Signed variant for cells where a negative is a real deficit/overage, not
+// routine variance — parentheses make direction unambiguous without relying
+// on color alone (fmt strips signs by design for lighter contexts).
+const fmtSigned=n=>n<0?'('+fmt(n)+')':fmt(n);
 const fmtK=n=>n>=1000?"$"+(n/1000).toFixed(0)+"k":fmt(n);
 const pct=(a,b)=>b?((a/b)*100).toFixed(1)+"%":"—";
 
@@ -446,7 +471,7 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMember
   }
   function isOverdue(t){return t.dueDate&&t.dueDate<today&&!t.done;}
 
-  const activeFY=currentFY();
+  const activeFY=activeGrantFY();
   const byFY={};
   txns.forEach(t=>{if(!byFY[t.fy])byFY[t.fy]={exp1:0,exp2:0,rev2:0};if(t.account==='0110029')byFY[t.fy].exp1+=t.amt;if(t.account==='0110238')byFY[t.fy].exp2+=t.amt;if(t.account==='0110237'&&t.sacs_group==='8xxx')byFY[t.fy].rev2+=t.amt;});
   const fy=byFY[activeFY]||{};
@@ -471,13 +496,14 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMember
   const reconciled=useMemo(()=>computePaymentReconciliation(txns),[txns]);
   const paymentMismatchCount=reconciled.filter(p=>p.mismatch).length;
 
-  const owedPayments=useMemo(()=>(payments||[]).filter(p=>p.fundingSource==='coe'&&p.status==='paid'&&p.coeReimbursement==='not_invoiced'),[payments]);
+  const owedPayments=useMemo(()=>(payments||[]).filter(p=>p.fundingSource==='coe'&&p.status==='paid'&&(p.coeReimbursement||'not_invoiced')==='not_invoiced'),[payments]);
   const owedAmt=owedPayments.reduce((s,p)=>s+(parseFloat(p.paidAmount||p.amount)||0),0);
   const owedCount=owedPayments.length;
 
+  const ended=grantEnded();
   const timeline=FY_LIST.map(f=>{
-    const status=f<activeFY?'Complete':f===activeFY?'Active':'Upcoming';
-    const dot=f<activeFY?'#93C5FD':f===activeFY?'#34D399':'#D1D5DB';
+    const status=ended?'Complete':f<activeFY?'Complete':f===activeFY?'Active':'Upcoming';
+    const dot=ended?'#93C5FD':f<activeFY?'#93C5FD':f===activeFY?'#34D399':'#D1D5DB';
     return{fy:f,status,dot};
 
   });
@@ -610,6 +636,10 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMember
         )}
       </div>
       <div style={{display:'flex',flexDirection:'column',gap:'11px'}}>
+        {ended&&<div style={{background:'#F1F5F9',border:'1px solid #CBD5E1',borderRadius:'12px',padding:'12px 16px'}}>
+          <div style={{fontSize:'12px',fontWeight:'700',color:'#475569'}}>Grant period ended June 30, 2027</div>
+          <div style={{fontSize:'11px',color:'#64748B',marginTop:'3px'}}>Figures below reflect the final grant year ({activeFY}). Closeout reporting may still be in progress.</div>
+        </div>}
         {readyAmt>0&&<div style={{background:'#1D4ED8',borderRadius:'12px',padding:'16px',color:'white'}}>
           <div style={{fontSize:'10px',fontWeight:'700',opacity:.8,letterSpacing:'0.06em',marginBottom:'4px'}}>READY TO INVOICE — PRIMARY ALLOCATION</div>
           <div style={{fontSize:'22px',fontWeight:'700'}}>{fmt(readyAmt)}</div>
@@ -666,7 +696,7 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMember
 
 // ── Budget vs Actual Tab ─────────────────────────────────────────────────────
 function BudgetTab({txns,amendments,setAmendments}){
-  const [selFY,setSelFY]=useState(()=>currentFY());
+  const [selFY,setSelFY]=useState(()=>activeGrantFY());
   const [showForm,setShowForm]=useState(false);
   const [newA,setNewA]=useState({date:'',category:'',description:'',amount:''});
   const bud=BUDGET[selFY]||BUDGET['FY25/26'];
@@ -760,7 +790,7 @@ function BudgetTab({txns,amendments,setAmendments}){
                 </div></td>
                 <td style={{...td,textAlign:'right'}}>{line.budget>0?fmt(line.budget):'—'}</td>
                 <td style={{...td,textAlign:'right',fontWeight:'600'}}>{act>0?fmt(act):'—'}</td>
-                <td style={{...td,textAlign:'right',fontWeight:'700',color:v>0?'#DC2626':v<0?'#059669':'#94A3B8'}}>{line.budget>0?(v>=0?'+':'')+fmt(v):'—'}</td>
+                <td style={{...td,textAlign:'right',fontWeight:'700',color:v>0?'#DC2626':v<0?'#059669':'#94A3B8'}}>{line.budget>0?(v>=0?'+'+fmt(v):fmtSigned(v)):'—'}</td>
                 <td style={{...td,textAlign:'right',fontSize:'12px',color:overBudget?'#D97706':'#94A3B8'}}>{line.budget>0?((act/line.budget)*100).toFixed(1)+'%':'—'}{overBudget&&' ⚠'}</td>
                 <td style={td}><div style={{height:'6px',background:'#F1F5F9',borderRadius:'3px',overflow:'hidden'}}><div style={{height:'100%',borderRadius:'3px',width:Math.min(100,u)+'%',background:u>110?'#DC2626':u>100?'#D97706':'#1D4ED8'}}/></div></td>
               </tr>
@@ -770,14 +800,23 @@ function BudgetTab({txns,amendments,setAmendments}){
             <td style={td}>TOTAL</td>
             <td style={{...td,textAlign:'right'}}>{fmt(bud.contract)}</td>
             <td style={{...td,textAlign:'right'}}>{fmt(totalActual)}</td>
-            <td style={{...td,textAlign:'right',color:totalActual-bud.contract>0?'#DC2626':'#059669'}}>{(totalActual-bud.contract>=0?'+':'')+fmt(totalActual-bud.contract)}</td>
+            <td style={{...td,textAlign:'right',color:totalActual-bud.contract>0?'#DC2626':'#059669'}}>{totalActual-bud.contract>=0?'+'+fmt(totalActual-bud.contract):fmtSigned(totalActual-bud.contract)}</td>
             <td style={{...td,textAlign:'right',fontSize:'12px',color:'#94A3B8'}}>{bud.contract>0?((totalActual/bud.contract)*100).toFixed(1)+'%':'—'}</td>
             <td style={td}/>
           </tr></tfoot>
         </table>
       </div>}
 
-      {!allYears&&selFY==='FY24/25'&&<Alert type="warn"><strong>Budget Amendment Review:</strong> FY24/25 shows $86,100 in consultant services and $28,236 in travel — neither appeared in Plan B. Contract requires amendments for &gt;10% variance.</Alert>}
+      {!allYears&&(()=>{
+        // Contract requires a budget amendment when a category exceeds its
+        // submitted plan by more than 10% (per-category basis, confirmed 2026-07).
+        const overCats=bud.lines.filter(l=>l.budget>0&&(actuals[l.code]||0)>l.budget*1.10);
+        if(overCats.length===0) return null;
+        const yearAmendments=amendments.filter(a=>a.fy===selFY);
+        return(
+          <Alert type="warn"><strong>Amendment check ({selFY}):</strong> {overCats.length} categor{overCats.length===1?'y':'ies'} exceed{overCats.length===1?'s':''} the submitted plan by more than 10% — {overCats.map(l=>`${l.label} (${fmt(actuals[l.code]||0)} vs ${fmt(l.budget)} planned)`).join('; ')}. Contract requires budget amendments for &gt;10% variance. {yearAmendments.length>0?`${yearAmendments.length} amendment(s) are logged for ${selFY} below — verify they cover these categories.`:`No amendments are logged for ${selFY} yet.`}</Alert>
+        );
+      })()}
 
       {/* All-years combined view */}
       {allYears&&<div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',overflow:'hidden'}}>
@@ -803,7 +842,7 @@ function BudgetTab({txns,amendments,setAmendments}){
                 <td style={td}>{line.label}</td>
                 <td style={{...td,textAlign:'right'}}>{bgt>0?fmt(bgt):'—'}</td>
                 <td style={{...td,textAlign:'right',fontWeight:'600'}}>{act>0?fmt(act):'—'}</td>
-                <td style={{...td,textAlign:'right',fontWeight:'600',color:v>0?'#DC2626':v<0?'#059669':'#94A3B8'}}>{bgt>0?(v>=0?'+':'')+fmt(v):'—'}</td>
+                <td style={{...td,textAlign:'right',fontWeight:'600',color:v>0?'#DC2626':v<0?'#059669':'#94A3B8'}}>{bgt>0?(v>=0?'+'+fmt(v):fmtSigned(v)):'—'}</td>
                 <td style={{...td,textAlign:'right',fontWeight:'700',color:'#1D4ED8'}}>{act>0?pctSpend.toFixed(1)+'%':'—'}</td>
                 <td style={td}><div style={{height:'8px',background:'#F1F5F9',borderRadius:'4px',overflow:'hidden'}}>
                   <div style={{height:'100%',borderRadius:'4px',width:pctSpend.toFixed(1)+'%',background:'#1D4ED8'}}/>
@@ -903,7 +942,7 @@ function LedgerTab({txns,enrichments,auditTags,onJumpToEnrich}){
           <option value="">All Accounts</option>
           {['0110028','0110029','0110030','0110237','0110238'].map(a=><option key={a} value={a}>{ACCT_OPT(a)}</option>)}
         </select>
-        <select value={filters.fy} onChange={e=>setF('fy',e.target.value)} style={inp}><option value="">All Years</option>{FY_LIST.slice(0,3).map(f=><option key={f} value={f}>{f}</option>)}</select>
+        <select value={filters.fy} onChange={e=>setF('fy',e.target.value)} style={inp}><option value="">All Years</option>{FY_LIST.map(f=><option key={f} value={f}>{f}</option>)}</select>
         <select value={filters.type} onChange={e=>setF('type',e.target.value)} style={inp}><option value="">All Types</option>{['JE','OH','AR','CR','TR'].map(t=><option key={t} value={t}>{t}</option>)}</select>
         <select value={filters.sacs} onChange={e=>setF('sacs',e.target.value)} style={inp}>{SACS_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
       </div>
@@ -1031,7 +1070,7 @@ function EnrichmentTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,j
           <option value="">All Accounts</option>
           {['0110028','0110029','0110030','0110237','0110238'].map(a=><option key={a} value={a}>{ACCT_OPT(a)}</option>)}
         </select>
-        <select value={filters.fy} onChange={e=>setF('fy',e.target.value)} style={inp}><option value="">All Years</option>{FY_LIST.slice(0,3).map(f=><option key={f} value={f}>{f}</option>)}</select>
+        <select value={filters.fy} onChange={e=>setF('fy',e.target.value)} style={inp}><option value="">All Years</option>{FY_LIST.map(f=><option key={f} value={f}>{f}</option>)}</select>
         <select value={filters.sacs} onChange={e=>setF('sacs',e.target.value)} style={inp}>{SACS_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
       </div>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'8px',alignItems:'center'}}>
@@ -1167,17 +1206,11 @@ function AuditSummaryTab({txns,enrichments,auditTags}){
 function CarryoverTab({txns}){
   const rows=useMemo(()=>computeFiscalChain(txns),[txns]);
   const coeNet=useMemo(()=>computeCoeNetPosition(txns),[txns]);
-  const nowFY=currentFY();
+  const nowFY=activeGrantFY();
   const lastRow=rows[rows.length-1];
   const chartData=rows.map(r=>({fy:r.fy,Contract:r.contract,Carryover:r.carryoverIn,'Actual Spend':Math.round(r.actual||0)}));
   const th={padding:'10px 16px',fontSize:'11px',fontWeight:'700',color:'#64748B',textTransform:'uppercase',letterSpacing:'0.05em',background:'#F8FAFC',borderBottom:'1px solid #E2E8F0'};
   const td={padding:'10px 16px',fontSize:'13px',color:'#334155',borderBottom:'1px solid #F8FAFC'};
-  // Signed formatter for this table specifically — a negative carryover here is
-  // a real deficit (spent more than the year's total available), not routine
-  // variance, so it needs an unambiguous minus sign rather than relying on
-  // color alone (fmt() strips signs by design for the lighter variance cells
-  // elsewhere in the app).
-  function fmtSigned(n){return n<0?'('+fmt(n)+')':fmt(n);}
   function noteFor(r,i){
     if(r.carryoverOut<0) return `⚠ Actual spend exceeded this year's total available by ${fmt(r.carryoverOut)} — carried forward as a shortfall`;
     if(i===0) return 'First Allocation received upfront';
@@ -1203,7 +1236,7 @@ function CarryoverTab({txns}){
               <td style={{...td,textAlign:'right'}}>{fmt(r.contract)}</td>
               <td style={{...td,textAlign:'right',color:r.carryoverIn<0?'#DC2626':'#D97706',fontWeight:'600'}}>{r.carryoverIn!==0?fmtSigned(r.carryoverIn):'--'}</td>
               <td style={{...td,textAlign:'right',fontWeight:'700'}}>{fmt(r.available)}</td>
-              <td style={{...td,textAlign:'right'}}>{r.actual>0?fmt(r.actual):<span style={{color:'#94A3B8',fontStyle:'italic'}}>none yet</span>}</td>
+              <td style={{...td,textAlign:'right',color:r.actual<0?'#059669':'#334155'}}>{r.actual!==0?fmtSigned(r.actual):<span style={{color:'#94A3B8',fontStyle:'italic'}}>none yet</span>}</td>
               <td style={{...td,textAlign:'right',fontWeight:'700',color:r.carryoverOut<0?'#DC2626':r.carryoverOut>0?'#D97706':'#059669'}}>{fmtSigned(r.carryoverOut)}</td>
               <td style={{...td,fontSize:'12px',color:r.carryoverOut<0?'#DC2626':'#64748B'}}>{noteFor(r,i)}</td>
             </tr>
@@ -1212,7 +1245,7 @@ function CarryoverTab({txns}){
       </div>
       <div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',padding:'20px'}}>
         <h3 style={{fontSize:'14px',fontWeight:'700',color:'#1E293B',margin:'0 0 4px'}}>Available Funds vs. Actual Spend by Year</h3>
-        <p style={{fontSize:'12px',color:'#64748B',margin:'0 0 16px'}}>Left bar = Contract + Carryover stacked  Right bar = Actual Spend (primary allocation, incl. indirect)</p>
+        <p style={{fontSize:'12px',color:'#64748B',margin:'0 0 16px'}}>Left bar = Contract + Carryover stacked  Right bar = Actual Spend (primary allocation, incl. indirect). Negative carryover doesn't render as a bar segment — see the table above for deficits.</p>
         <StackedBarChart data={chartData} height={260}/>
       </div>
       <div style={{background:'#FFFBEB',border:'1px solid #FDE68A',borderRadius:'12px',padding:'18px'}}>
@@ -1237,6 +1270,7 @@ function UploadModal({onClose,onImport,existingCount,existingTxns}){
   const [error,setError]=useState('');
   const [loading,setLoading]=useState(false);
   const [showAllNew,setShowAllNew]=useState(false);
+  const [replaceConfirm,setReplaceConfirm]=useState('');
   const fileRef=useRef();
 
   const existingIds=useMemo(()=>new Set((existingTxns||[]).map(t=>t.id)),[existingTxns]);
@@ -1245,11 +1279,18 @@ function UploadModal({onClose,onImport,existingCount,existingTxns}){
   // or the selected mode changes, so switching modes updates the preview live.
   const diff=useMemo(()=>{
     if(!parsed) return null;
-    if(mode!=='incremental') return{newRows:parsed,alreadyExists:[]};
+    if(mode!=='incremental') return{newRows:parsed,alreadyExists:[],renumberSuspect:false};
     const newRows=parsed.filter(r=>!existingIds.has(r.id));
     const alreadyExists=parsed.filter(r=>existingIds.has(r.id));
-    return{newRows,alreadyExists};
-  },[parsed,mode,existingIds]);
+    // Transaction IDs are RowNum-based. If the ledger export ever renumbers
+    // rows, old data re-appears as "new" under fresh IDs. Signature: a large
+    // share of "new" rows dated inside the range we already have.
+    const existingDates=(existingTxns||[]).map(t=>t.date).filter(Boolean).sort();
+    const existingMax=existingDates[existingDates.length-1]||'';
+    const backdated=newRows.filter(r=>r.date&&existingMax&&r.date<=existingMax).length;
+    const renumberSuspect=newRows.length>20&&backdated/newRows.length>0.25;
+    return{newRows,alreadyExists,renumberSuspect,backdated};
+  },[parsed,mode,existingIds,existingTxns]);
 
   function readFileAsText(file){
     return new Promise((resolve,reject)=>{
@@ -1336,7 +1377,13 @@ function UploadModal({onClose,onImport,existingCount,existingTxns}){
                 <div><strong>Dates:</strong> {preview.min} – {preview.max}</div>
                 {preview.duplicatesSkipped>0&&<div><strong>Duplicates skipped:</strong> {preview.duplicatesSkipped}</div>}
               </div>
-              {mode==='replace'&&<div style={{marginTop:'8px',fontSize:'12px',color:'#991B1B',fontWeight:'700'}}>⚠ This will replace all {existingCount.toLocaleString()} existing transactions with these {preview.count.toLocaleString()}.</div>}
+              {mode==='replace'&&(
+                <div style={{marginTop:'10px',paddingTop:'10px',borderTop:'1px solid #A7F3D0'}}>
+                  <div style={{fontSize:'12px',color:'#991B1B',fontWeight:'700',marginBottom:'8px'}}>⚠ This will replace all {existingCount.toLocaleString()} existing transactions with these {preview.count.toLocaleString()}. Enrichments and audit tags are stored separately and are not affected.</div>
+                  <label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'4px'}}>Type REPLACE to enable the button:</label>
+                  <input value={replaceConfirm} onChange={e=>setReplaceConfirm(e.target.value)} placeholder="REPLACE" style={{border:'1px solid #FECACA',borderRadius:'8px',padding:'7px 10px',fontSize:'13px',width:'160px',fontFamily:'monospace'}}/>
+                </div>
+              )}
             </div>
           )}
 
@@ -1347,6 +1394,11 @@ function UploadModal({onClose,onImport,existingCount,existingTxns}){
                 <div><span style={{fontSize:'20px',fontWeight:'700',color:'#1D4ED8'}}>{diff.newRows.length.toLocaleString()}</span><span style={{fontSize:'12px',color:'#64748B',marginLeft:'6px'}}>new — will be added</span></div>
                 <div><span style={{fontSize:'20px',fontWeight:'700',color:'#94A3B8'}}>{diff.alreadyExists.length.toLocaleString()}</span><span style={{fontSize:'12px',color:'#64748B',marginLeft:'6px'}}>already in database — will be skipped</span></div>
               </div>
+              {diff.renumberSuspect&&(
+                <div style={{background:'#FFFBEB',border:'1px solid #FDE68A',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#92400E',marginBottom:'10px'}}>
+                  ⚠ <strong>{diff.backdated.toLocaleString()} of the {diff.newRows.length.toLocaleString()} "new" rows are dated inside the range already in the database.</strong> This pattern can mean the ledger export renumbered its rows (transaction IDs are row-number based), which would import duplicates under new IDs. Spot-check the preview below against existing data before committing — if rows look like duplicates, use Full Replace instead.
+                </div>
+              )}
               {diff.newRows.length===0?(
                 <div style={{fontSize:'13px',color:'#94A3B8',fontStyle:'italic'}}>Nothing new to add — every parsed row already exists in Firestore.</div>
               ):(
@@ -1386,7 +1438,7 @@ function UploadModal({onClose,onImport,existingCount,existingTxns}){
         </div>
         <div style={{display:'flex',gap:'10px',padding:'16px 22px',borderTop:'1px solid #E2E8F0',justifyContent:'flex-end'}}>
           <button onClick={onClose} style={{padding:'8px 18px',borderRadius:'8px',border:'1px solid #E2E8F0',background:'white',cursor:'pointer',color:'#64748B',fontWeight:'600',fontSize:'13px'}}>Cancel</button>
-          <button onClick={confirm} disabled={!parsed||(mode==='incremental'&&diff&&diff.newRows.length===0)} style={{padding:'8px 20px',borderRadius:'8px',border:'none',background:parsed&&!(mode==='incremental'&&diff&&diff.newRows.length===0)?'#1D4ED8':'#E2E8F0',color:parsed&&!(mode==='incremental'&&diff&&diff.newRows.length===0)?'white':'#94A3B8',cursor:parsed&&!(mode==='incremental'&&diff&&diff.newRows.length===0)?'pointer':'not-allowed',fontWeight:'700',fontSize:'13px'}}>
+          <button onClick={confirm} disabled={!parsed||(mode==='incremental'&&diff&&diff.newRows.length===0)||(mode==='replace'&&replaceConfirm!=='REPLACE')} style={(()=>{const ok=parsed&&!(mode==='incremental'&&diff&&diff.newRows.length===0)&&!(mode==='replace'&&replaceConfirm!=='REPLACE');return{padding:'8px 20px',borderRadius:'8px',border:'none',background:ok?'#1D4ED8':'#E2E8F0',color:ok?'white':'#94A3B8',cursor:ok?'pointer':'not-allowed',fontWeight:'700',fontSize:'13px'};})()}>
             {mode==='incremental'?(diff?`Add ${diff.newRows.length.toLocaleString()} New Transactions`:'Add New Transactions'):'Replace All Data'}
           </button>
         </div>
@@ -1460,7 +1512,7 @@ function TeamPanel({currentUid,currentRole,onClose}){
         </div>
         <div style={{padding:'20px 22px'}}>
           <div style={{background:'#F8FAFC',borderRadius:'10px',padding:'12px',marginBottom:'16px',fontSize:'12px',color:'#64748B'}}>
-            <strong>Role permissions:</strong> Director & Admin Support see all tabs · Team Member sees Overview, Carryover, Budget, Revenue only
+            <strong>Role permissions:</strong> Director: all tabs · Admin Support: all except Activity Log · Team Member: Overview, Fiscal Health, Partner Payments (view + notes)
           </div>
           {loading?<div style={{textAlign:'center',padding:'20px',color:'#94A3B8'}}>Loading team members...</div>:
             <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
@@ -1499,16 +1551,36 @@ function TeamPanel({currentUid,currentRole,onClose}){
 function AllocationView({txns}){
   const receivedTotal=PAYMENTS.filter(p=>p.status==='received').reduce((s,p)=>s+p.amt,0);
   const readyTotal=PAYMENTS.filter(p=>p.status==='ready').reduce((s,p)=>s+p.amt,0);
+  const receivedNums=PAYMENTS.filter(p=>p.status==='received').map(p=>p.n);
+  const readyNums=PAYMENTS.filter(p=>p.status==='ready').map(p=>p.n);
+  const remainingNums=PAYMENTS.filter(p=>p.status!=='received'&&p.status!=='ready').map(p=>p.n);
+  // Compress a list of payment numbers into a compact label, e.g. [1,2,3]→"Pmts 1–3", [4,6,7]→"Pmts 4, 6–7"
+  function pmtRangeLabel(nums){
+    if(nums.length===0)return 'none';
+    const s=[...nums].sort((a,b)=>a-b);
+    const parts=[];let start=s[0],prev=s[0];
+    for(let i=1;i<=s.length;i++){
+      const cur=s[i];
+      if(cur===prev+1){prev=cur;continue;}
+      parts.push(start===prev?String(start):start+'\u2013'+prev);
+      start=cur;prev=cur;
+    }
+    return(nums.length===1?'Pmt ':'Pmts ')+parts.join(', ');
+  }
   const reconciled=useMemo(()=>computePaymentReconciliation(txns),[txns]);
   const mismatchCount=reconciled.filter(p=>p.mismatch).length;
   return(
     <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
       <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'12px'}}>
-        <KpiCard label="Received (Pmts 1-3)" value={fmt(receivedTotal)} accent="#059669"/>
-        <KpiCard label="Ready to Invoice (4-6)" value={fmt(readyTotal)} color="#1D4ED8" accent="#1D4ED8"/>
-        <KpiCard label="Remaining (Pmts 7-9)" value={fmt(CONTRACT_TOTAL_DISPLAY-receivedTotal-readyTotal)} accent="#64748B"/>
+        <KpiCard label={'Received ('+pmtRangeLabel(receivedNums)+')'} value={fmt(receivedTotal)} accent="#059669"/>
+        <KpiCard label={'Ready to Invoice ('+pmtRangeLabel(readyNums)+')'} value={fmt(readyTotal)} color="#1D4ED8" accent="#1D4ED8"/>
+        <KpiCard label={'Remaining ('+pmtRangeLabel(remainingNums)+')'} value={fmt(CONTRACT_TOTAL_DISPLAY-receivedTotal-readyTotal)} accent="#64748B"/>
       </div>
-      <Alert type="success">All spending triggers through Payment 8 have been met. Payments 4-6 ({fmt(readyTotal)}) can be invoiced immediately.</Alert>
+      {readyNums.length>0?(
+        <Alert type="success"><strong>{pmtRangeLabel(readyNums)}</strong> ({fmt(readyTotal)}) have met their spending triggers and are eligible to invoice. Eligibility reflects ledger spend thresholds — invoicing and CDE approval are still manual steps.</Alert>
+      ):(
+        <Alert type="info">No payments are currently awaiting invoice. Statuses update as spend thresholds are met and deposits are recorded.</Alert>
+      )}
       {mismatchCount>0&&(
         <Alert type="warn"><strong>{mismatchCount} payment{mismatchCount!==1?'s':''}</strong> {mismatchCount!==1?'have':'has'} a recorded status that doesn't match what the ledger data suggests — see the "System check" note under each flagged row below. Status is kept manual since real-world cash timing can't always be reconstructed automatically; use these as a prompt to double-check, not an auto-correction.</Alert>
       )}
@@ -1580,14 +1652,18 @@ function DataAuditTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,ju
 }
 
 // ── Partner Payments Tab ───────────────────────────────────────────────────────
+// Simplified 2026-07: full lifecycle tracking (Draft→Agreement→AP→Processing→
+// Paid) replaced with a simple Unpaid/Paid flag. Notes and labels (FY, payment
+// type, funding source) are the focal points. Legacy records with old lifecycle
+// statuses are treated as 'unpaid' unless they were 'paid'. Old statusHistory
+// entries are preserved and still displayed as the activity record.
 const PAY_STATUSES={
-  draft:      {label:'Draft',            color:'#64748B',bg:'#F1F5F9',step:0},
-  agreement:  {label:'Agreement Signed', color:'#1D4ED8',bg:'#DBEAFE',step:1},
-  submitted:  {label:'Submitted to AP',  color:'#D97706',bg:'#FEF3C7',step:2},
-  processing: {label:'Processing',       color:'#7C3AED',bg:'#EDE9FE',step:3},
-  paid:       {label:'Paid',             color:'#059669',bg:'#D1FAE5',step:4},
+  unpaid:{label:'Unpaid',color:'#B91C1C',bg:'#FEE2E2'},
+  paid:  {label:'Paid',  color:'#059669',bg:'#D1FAE5'},
 };
-const STATUS_ORDER=['draft','agreement','submitted','processing','paid'];
+const STATUS_ORDER=['unpaid','paid'];
+// Legacy lifecycle values (draft/agreement/submitted/processing) collapse to unpaid
+function normPayStatus(s){return s==='paid'?'paid':'unpaid';}
 const PAY_TYPES=['Stipend','Travel','Services','Materials','Other'];
 const RECIP_TYPES=['LEA','COE','Individual','Vendor','Other'];
 const EMPTY_PAY={recipient:'',recipientType:'Individual',paymentType:'Services',description:'',amount:'',fundingSource:'primary',fyYear:'',agreementRef:'',expectedDate:'',txnId:'',paidDate:'',paidAmount:''};
@@ -1595,8 +1671,27 @@ const EMPTY_PAY={recipient:'',recipientType:'Individual',paymentType:'Services',
 // ── Payment Form (standalone component — MUST be outside PartnerPaymentsTab) ──
 // Extracting this fixes a React bug where inline component definitions inside a
 // parent that re-renders on every keystroke get remounted, losing input focus.
-function PayForm({form,setForm,onSave,onCancel,saveLabel}){
+function PayForm({form,setForm,onSave,onCancel,saveLabel,txns}){
   const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'7px 10px',fontSize:'13px',width:'100%'};
+  // 0110238 transactions for the selected fiscal year, newest first. If the
+  // form already references a txn outside the current FY filter, keep it in
+  // the list so the select can still display it.
+  const txn238=useMemo(()=>{
+    const list=(txns||[]).filter(t=>t.account==='0110238'&&t.fy===form.fyYear)
+      .sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+    if(form.txnId&&!list.find(t=>t.id===form.txnId)){
+      const cur=(txns||[]).find(t=>t.id===form.txnId);
+      if(cur) list.unshift(cur);
+    }
+    return list;
+  },[txns,form.fyYear,form.txnId]);
+  function selectTxn(id){
+    if(!id){setForm(p=>({...p,txnId:''}));return;}
+    const t=(txns||[]).find(x=>x.id===id);
+    // Matching a ledger transaction auto-fills the actual pay date and amount
+    if(t) setForm(p=>({...p,txnId:id,paidDate:t.date||p.paidDate,paidAmount:String(t.amt??p.paidAmount)}));
+    else setForm(p=>({...p,txnId:id}));
+  }
   return(
     <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
       <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr',gap:'10px'}}>
@@ -1611,11 +1706,19 @@ function PayForm({form,setForm,onSave,onCancel,saveLabel}){
         <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Fiscal Year</label><select value={form.fyYear} onChange={e=>setForm(p=>({...p,fyYear:e.target.value}))} style={inp}>{FY_LIST.map(f=><option key={f} value={f}>{f}</option>)}</select></div>
         <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Agreement Ref #</label><input value={form.agreementRef} onChange={e=>setForm(p=>({...p,agreementRef:e.target.value}))} placeholder="MOU #, PO #, etc." style={inp}/></div>
       </div>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:'10px'}}>
-        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Expected Pay Date</label><input type="date" value={form.expectedDate} onChange={e=>setForm(p=>({...p,expectedDate:e.target.value}))} style={inp}/></div>
-        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Actual Pay Date</label><input type="date" value={form.paidDate} onChange={e=>setForm(p=>({...p,paidDate:e.target.value}))} style={inp}/></div>
-        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Actual Amount Paid</label><input type="number" value={form.paidAmount} onChange={e=>setForm(p=>({...p,paidAmount:e.target.value}))} placeholder="0.00" style={inp}/></div>
-        <div><label style={{display:'block',fontSize:'11px',color:'#059669',fontWeight:'600',marginBottom:'3px'}}>Ledger Txn ID</label><input value={form.txnId} onChange={e=>setForm(p=>({...p,txnId:e.target.value}))} placeholder="Link to ledger entry" style={{...inp,background:'#ECFDF5',borderColor:'#A7F3D0'}}/></div>
+      {/* Ledger match: pick the actual 0110238 transaction; date + amount autofill */}
+      <div style={{background:'#ECFDF5',border:'1px solid #A7F3D0',borderRadius:'10px',padding:'12px'}}>
+        <label style={{display:'block',fontSize:'11px',color:'#047857',fontWeight:'700',marginBottom:'4px'}}>Match Ledger Transaction — 0110238, {form.fyYear||'select FY'}</label>
+        <select value={form.txnId} onChange={e=>selectTxn(e.target.value)} style={{...inp,borderColor:'#A7F3D0',marginBottom:'8px'}}>
+          <option value="">— No ledger match yet —</option>
+          {txn238.map(t=><option key={t.id} value={t.id}>{t.date} · {fmt(t.amt)} · {(t.desc||'').slice(0,48)}</option>)}
+        </select>
+        {txn238.length===0&&<div style={{fontSize:'11px',color:'#047857',marginBottom:'8px'}}>No 0110238 transactions found for {form.fyYear||'the selected year'}. Import newer ledger data or change the fiscal year above.</div>}
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'10px'}}>
+          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Expected Pay Date</label><input type="date" value={form.expectedDate} onChange={e=>setForm(p=>({...p,expectedDate:e.target.value}))} style={inp}/></div>
+          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Actual Pay Date <span style={{color:'#047857'}}>(auto on match)</span></label><input type="date" value={form.paidDate} onChange={e=>setForm(p=>({...p,paidDate:e.target.value}))} style={inp}/></div>
+          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Actual Amount Paid <span style={{color:'#047857'}}>(auto on match)</span></label><input type="number" value={form.paidAmount} onChange={e=>setForm(p=>({...p,paidAmount:e.target.value}))} style={inp}/></div>
+        </div>
       </div>
       <div style={{display:'flex',gap:'8px',justifyContent:'flex-end',paddingTop:'4px'}}>
         <button onClick={onCancel} style={{border:'1px solid #E2E8F0',background:'white',borderRadius:'8px',padding:'8px 16px',cursor:'pointer',color:'#64748B',fontSize:'13px'}}>Cancel</button>
@@ -1625,14 +1728,14 @@ function PayForm({form,setForm,onSave,onCancel,saveLabel}){
   );
 }
 
-// ── COE Reimbursement statuses (tracked separately from partner payment lifecycle) ──
+// ── COE Reimbursement statuses (tracked separately from paid/unpaid) ──────────
 const COE_REIMB_STATUSES={
   not_invoiced:{label:'Not Yet Invoiced to COE',color:'#DC2626',bg:'#FEE2E2'},
   invoiced:    {label:'Invoiced — Awaiting Reimbursement',color:'#D97706',bg:'#FEF3C7'},
   received:    {label:'Reimbursement Received',color:'#059669',bg:'#D1FAE5'},
 };
 
-function PartnerPaymentsTab({payments,userRole}){
+function PartnerPaymentsTab({payments,userRole,txns}){
   const canManage=userRole==='director'||userRole==='admin_support';
   const [filterSource,setFilterSource]=useState('');
   const [filterStatus,setFilterStatus]=useState('');
@@ -1644,39 +1747,39 @@ function PartnerPaymentsTab({payments,userRole}){
   const [editId,setEditId]=useState(null);
   const [noteInputId,setNoteInputId]=useState(null);
   const [noteText,setNoteText]=useState('');
-  const [statusEditId,setStatusEditId]=useState(null);
-  const [statusForm,setStatusForm]=useState({status:'',note:''});
-  const [form,setForm]=useState({...EMPTY_PAY,fyYear:currentFY()});
+  const [form,setForm]=useState({...EMPTY_PAY,fyYear:activeGrantFY()});
   const [formError,setFormError]=useState('');
 
   const filtered=useMemo(()=>{
     let r=payments;
     if(search){const q=search.toLowerCase();r=r.filter(p=>(p.recipient||'').toLowerCase().includes(q)||(p.description||'').toLowerCase().includes(q));}
     if(filterSource) r=r.filter(p=>p.fundingSource===filterSource);
-    if(filterStatus) r=r.filter(p=>p.status===filterStatus);
+    if(filterStatus) r=r.filter(p=>normPayStatus(p.status)===filterStatus);
     if(filterType) r=r.filter(p=>p.paymentType===filterType);
     if(filterFY) r=r.filter(p=>p.fyYear===filterFY);
     return[...r].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
   },[payments,search,filterSource,filterStatus,filterType,filterFY]);
 
   const totalAmt=payments.reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
-  const outstanding=payments.filter(p=>p.status!=='paid');
+  const outstanding=payments.filter(p=>normPayStatus(p.status)!=='paid');
   const unpaidAmt=outstanding.reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
   const unpaidN=outstanding.length;
-  const paidAmt=payments.filter(p=>p.status==='paid').reduce((s,p)=>s+(parseFloat(p.paidAmount||p.amount)||0),0);
+  const paidAmt=payments.filter(p=>normPayStatus(p.status)==='paid').reduce((s,p)=>s+(parseFloat(p.paidAmount||p.amount)||0),0);
 
   async function handleAdd(){
     setFormError('');
     if(!form.recipient.trim()||!form.amount){setFormError('Recipient name and expected amount are required.');return;}
     const u=_auth.currentUser;if(!u){setFormError('You are not signed in.');return;}
     const id='p'+Date.now();const now=new Date().toISOString().slice(0,10);
+    // A ledger match at creation time means the payment already went out
+    const initialStatus=form.txnId?'paid':'unpaid';
     try{
-      await FS.payment(id,{...form,id,amount:parseFloat(form.amount)||0,paidAmount:parseFloat(form.paidAmount)||0,status:'draft',
-        coeReimbursement:form.fundingSource==='coe'?'not_invoiced':null,
-        statusHistory:[{status:'draft',note:'Payment record created',updatedBy:u.displayName||u.email,updatedAt:now}],
+      await FS.payment(id,{...form,id,amount:parseFloat(form.amount)||0,paidAmount:parseFloat(form.paidAmount)||0,status:initialStatus,
+        coeReimbursement:form.fundingSource==='coe'&&initialStatus==='paid'?'not_invoiced':null,
+        statusHistory:[{status:initialStatus,note:initialStatus==='paid'?'Created with ledger match '+form.txnId:'Payment record created',updatedBy:u.displayName||u.email,updatedAt:now}],
         notes:[],createdAt:now,createdBy:u.displayName||u.email,createdByEmail:u.email});
-      logActivity('payment_added',`Added payment: "${form.recipient}" — ${fmt(parseFloat(form.amount)||0)}`,{type:form.paymentType,source:form.fundingSource});
-      setShowAdd(false);setForm({...EMPTY_PAY,fyYear:currentFY()});
+      logActivity('payment_added',`Added payment: "${form.recipient}" — ${fmt(parseFloat(form.amount)||0)}`,{type:form.paymentType,source:form.fundingSource,status:initialStatus});
+      setShowAdd(false);setForm({...EMPTY_PAY,fyYear:activeGrantFY()});
     }catch(err){
       setFormError('Could not save payment: '+(err&&err.message?err.message:'unknown error')+'. This is usually a permissions issue — confirm your role in Manage Team.');
     }
@@ -1687,7 +1790,14 @@ function PartnerPaymentsTab({payments,userRole}){
     try{
       const before=payments.find(x=>x.id===editId);
       if(before) await saveEventHistory('updated',{...before,eventName:before.recipient});
-      await FS.paymentUpdate(editId,{recipient:form.recipient,recipientType:form.recipientType,paymentType:form.paymentType,description:form.description,amount:parseFloat(form.amount)||0,fundingSource:form.fundingSource,fyYear:form.fyYear,agreementRef:form.agreementRef,expectedDate:form.expectedDate,txnId:form.txnId||'',paidDate:form.paidDate||'',paidAmount:parseFloat(form.paidAmount)||0});
+      const upd={recipient:form.recipient,recipientType:form.recipientType,paymentType:form.paymentType,description:form.description,amount:parseFloat(form.amount)||0,fundingSource:form.fundingSource,fyYear:form.fyYear,agreementRef:form.agreementRef,expectedDate:form.expectedDate,txnId:form.txnId||'',paidDate:form.paidDate||'',paidAmount:parseFloat(form.paidAmount)||0};
+      // Matching a ledger transaction implies the payment was made
+      if(form.txnId&&before&&normPayStatus(before.status)!=='paid'){
+        upd.status='paid';
+        upd.statusHistory=[...(before.statusHistory||[]),{status:'paid',note:'Marked paid via ledger match '+form.txnId,updatedBy:(_auth.currentUser&&(_auth.currentUser.displayName||_auth.currentUser.email))||'',updatedAt:new Date().toISOString().slice(0,10)}];
+        if(before.fundingSource==='coe'&&!before.coeReimbursement) upd.coeReimbursement='not_invoiced';
+      }
+      await FS.paymentUpdate(editId,upd);
       logActivity('payment_edited',`Edited payment: "${form.recipient}"`,{id:editId});
       setEditId(null);
     }catch(err){
@@ -1700,22 +1810,20 @@ function PartnerPaymentsTab({payments,userRole}){
     await FS.paymentDelete(p.id);
     logActivity('payment_deleted',`Deleted payment: "${p.recipient}" — ${fmt(parseFloat(p.amount)||0)}`,{id:p.id});
   }
-  async function handleStatusUpdate(p){
-    if(!statusForm.status) return;
+  async function togglePaid(p){
     const u=_auth.currentUser;if(!u) return;
     const now=new Date().toISOString().slice(0,10);
-    const newHist=[...(p.statusHistory||[]),{status:statusForm.status,note:statusForm.note,updatedBy:u.displayName||u.email,updatedAt:now}];
-    const upd={status:statusForm.status,statusHistory:newHist};
-    if(statusForm.status==='paid'){
-      upd.paidDate=upd.paidDate||now;
-      // Initialize COE reimbursement tracking the moment a COE-funded payment is marked Paid
+    const cur=normPayStatus(p.status);
+    const next=cur==='paid'?'unpaid':'paid';
+    const upd={status:next,statusHistory:[...(p.statusHistory||[]),{status:next,note:next==='paid'?'Marked paid':'Reverted to unpaid',updatedBy:u.displayName||u.email,updatedAt:now}]};
+    if(next==='paid'){
+      if(!p.paidDate) upd.paidDate=now;
       if(p.fundingSource==='coe'&&!p.coeReimbursement) upd.coeReimbursement='not_invoiced';
     }
     await FS.paymentUpdate(p.id,upd);
-    logActivity('payment_status',`"${p.recipient}" → ${PAY_STATUSES[statusForm.status]?.label}`,{id:p.id,status:statusForm.status,note:statusForm.note});
-    setStatusEditId(null);setStatusForm({status:'',note:''});
+    logActivity('payment_status',`"${p.recipient}" → ${PAY_STATUSES[next].label}`,{id:p.id,status:next});
   }
-  async function handleCoeReimbUpdate(p,newStatus){
+async function handleCoeReimbUpdate(p,newStatus){
     const u=_auth.currentUser;if(!u) return;
     const now=new Date().toISOString().slice(0,10);
     const upd={coeReimbursement:newStatus};
@@ -1732,33 +1840,29 @@ function PartnerPaymentsTab({payments,userRole}){
     logActivity('payment_note',`Added note to "${p.recipient}"`,{id:p.id});
     setNoteText('');setNoteInputId(null);
   }
-  function startEdit(p){setEditId(p.id);setForm({recipient:p.recipient||'',recipientType:p.recipientType||'Individual',paymentType:p.paymentType||'Services',description:p.description||'',amount:String(p.amount||''),fundingSource:p.fundingSource||'primary',fyYear:p.fyYear||currentFY(),agreementRef:p.agreementRef||'',expectedDate:p.expectedDate||'',txnId:p.txnId||'',paidDate:p.paidDate||'',paidAmount:String(p.paidAmount||'')});}
+  function startEdit(p){setEditId(p.id);setForm({recipient:p.recipient||'',recipientType:p.recipientType||'Individual',paymentType:p.paymentType||'Services',description:p.description||'',amount:String(p.amount||''),fundingSource:p.fundingSource||'primary',fyYear:p.fyYear||activeGrantFY(),agreementRef:p.agreementRef||'',expectedDate:p.expectedDate||'',txnId:p.txnId||'',paidDate:p.paidDate||'',paidAmount:String(p.paidAmount||'')});}
 
   const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'7px 10px',fontSize:'13px',width:'100%'};
   const srcLabel={primary:'Primary Allocation',coe:'COE Reimbursement'};
   const srcColor={primary:{bg:'#DBEAFE',c:'#1D4ED8'},coe:{bg:'#FEF3C7',c:'#92400E'}};
+  const typeColor={Stipend:{bg:'#EDE9FE',c:'#6D28D9'},Travel:{bg:'#FCE7F3',c:'#BE185D'},Services:{bg:'#E0F2FE',c:'#0369A1'},Materials:{bg:'#ECFDF5',c:'#047857'},Other:{bg:'#F3F4F6',c:'#374151'}};
 
   return(
     <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
       {/* Summary */}
       <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'12px'}}>
         <KpiCard label="Total Tracked" value={fmt(totalAmt)} sub={payments.length+' payments'} accent="#64748B"/>
-        <KpiCard label="Outstanding" value={fmt(unpaidAmt)} sub={unpaidN+' not yet paid'} color="#DC2626" accent="#DC2626"/>
-        <KpiCard label="Paid" value={fmt(paidAmt)} sub={payments.filter(p=>p.status==='paid').length+' completed'} color="#059669" accent="#059669"/>
+        <KpiCard label="Unpaid" value={fmt(unpaidAmt)} sub={unpaidN+' outstanding'} color="#DC2626" accent="#DC2626"/>
+        <KpiCard label="Paid" value={fmt(paidAmt)} sub={payments.filter(p=>normPayStatus(p.status)==='paid').length+' completed'} color="#059669" accent="#059669"/>
       </div>
 
-      {/* Outstanding payments banner — quick-glance summary of what still needs to be processed */}
+      {/* Outstanding banner */}
       {unpaidN>0&&(
         <div style={{background:'#FEF2F2',border:'2px solid #FECACA',borderRadius:'12px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'14px'}}>
           <span style={{fontSize:'22px',flexShrink:0}}>⏳</span>
           <div style={{flex:1}}>
-            <div style={{fontWeight:'700',color:'#991B1B',fontSize:'14px'}}>{unpaidN} partner payment{unpaidN!==1?'s':''} still need{unpaidN===1?'s':''} to be processed</div>
-            <div style={{fontSize:'12px',color:'#B91C1C',marginTop:'3px',display:'flex',gap:'14px',flexWrap:'wrap'}}>
-              {STATUS_ORDER.filter(s=>s!=='paid').map(s=>{
-                const n=outstanding.filter(p=>p.status===s).length;
-                return n>0?<span key={s}>{n} {PAY_STATUSES[s].label}</span>:null;
-              })}
-            </div>
+            <div style={{fontWeight:'700',color:'#991B1B',fontSize:'14px'}}>{unpaidN} partner payment{unpaidN!==1?'s':''} still unpaid</div>
+            <div style={{fontSize:'12px',color:'#B91C1C',marginTop:'3px'}}>Match each to its 0110238 ledger transaction once the payment posts.</div>
           </div>
           <div style={{textAlign:'right',flexShrink:0}}>
             <div style={{fontSize:'22px',fontWeight:'700',color:'#991B1B'}}>{fmt(unpaidAmt)}</div>
@@ -1771,10 +1875,10 @@ function PartnerPaymentsTab({payments,userRole}){
       <div style={{display:'flex',gap:'8px',flexWrap:'wrap',alignItems:'center'}}>
         <input placeholder="Search recipient or description..." value={search} onChange={e=>setSearch(e.target.value)} style={{...inp,flex:'2',minWidth:'200px'}}/>
         <select value={filterSource} onChange={e=>setFilterSource(e.target.value)} style={{...inp,flex:1,minWidth:'140px'}}><option value="">All Funding Sources</option><option value="primary">Primary Allocation</option><option value="coe">COE Reimbursement</option></select>
-        <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} style={{...inp,flex:1,minWidth:'140px'}}><option value="">All Statuses</option>{STATUS_ORDER.map(s=><option key={s} value={s}>{PAY_STATUSES[s].label}</option>)}</select>
+        <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} style={{...inp,flex:1,minWidth:'110px'}}><option value="">Paid & Unpaid</option>{STATUS_ORDER.map(s=><option key={s} value={s}>{PAY_STATUSES[s].label}</option>)}</select>
         <select value={filterType} onChange={e=>setFilterType(e.target.value)} style={{...inp,flex:1,minWidth:'110px'}}><option value="">All Types</option>{PAY_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select>
         <select value={filterFY} onChange={e=>setFilterFY(e.target.value)} style={{...inp,flex:1,minWidth:'100px'}}><option value="">All Years</option>{FY_LIST.map(f=><option key={f} value={f}>{f}</option>)}</select>
-        {canManage&&<button onClick={()=>{setShowAdd(true);setEditId(null);setFormError('');setForm({...EMPTY_PAY,fyYear:currentFY()});}} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontWeight:'600',cursor:'pointer',whiteSpace:'nowrap'}}>+ Add Payment</button>}
+        {canManage&&<button onClick={()=>{setShowAdd(true);setEditId(null);setFormError('');setForm({...EMPTY_PAY,fyYear:activeGrantFY()});}} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontWeight:'600',cursor:'pointer',whiteSpace:'nowrap'}}>+ Add Payment</button>}
       </div>
 
       {/* Add form */}
@@ -1782,7 +1886,7 @@ function PartnerPaymentsTab({payments,userRole}){
         <div style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
           <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>New Payment Record</div>
           {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
-          <PayForm form={form} setForm={setForm} onSave={handleAdd} onCancel={()=>setShowAdd(false)} saveLabel="Create Payment"/>
+          <PayForm form={form} setForm={setForm} onSave={handleAdd} onCancel={()=>setShowAdd(false)} saveLabel="Create Payment" txns={txns}/>
         </div>
       )}
 
@@ -1792,59 +1896,49 @@ function PartnerPaymentsTab({payments,userRole}){
       {/* Payment cards */}
       <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
         {filtered.map(p=>{
-          const ps=PAY_STATUSES[p.status]||PAY_STATUSES.draft;
+          const status=normPayStatus(p.status);
+          const ps=PAY_STATUSES[status];
           const sc=srcColor[p.fundingSource]||srcColor.primary;
+          const tc=typeColor[p.paymentType]||typeColor.Other;
           const isExpanded=expandedId===p.id;
           const isEditing=editId===p.id;
-          const isStatusEdit=statusEditId===p.id;
-          const curStep=PAY_STATUSES[p.status]?.step||0;
           const crs=p.coeReimbursement?COE_REIMB_STATUSES[p.coeReimbursement]:null;
+          const matchedTxn=p.txnId?(txns||[]).find(t=>t.id===p.txnId):null;
 
           if(isEditing) return(
             <div key={p.id} style={{background:'#EFF6FF',border:'2px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
               <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>Editing: {p.recipient}</div>
               {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
-              <PayForm form={form} setForm={setForm} onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes"/>
+              <PayForm form={form} setForm={setForm} onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes" txns={txns}/>
             </div>
           );
 
           return(
-            <div key={p.id} style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',overflow:'hidden'}}>
-              {/* Card header */}
+            <div key={p.id} style={{background:'white',borderRadius:'12px',border:status==='unpaid'?'1px solid #FECACA':'1px solid #E2E8F0',overflow:'hidden'}}>
+              {/* Card header — labels are the focal point */}
               <div style={{display:'flex',alignItems:'flex-start',gap:'14px',padding:'14px 16px',cursor:'pointer'}} onClick={()=>setExpandedId(isExpanded?null:p.id)}>
                 <div style={{flex:1,minWidth:0}}>
-                  <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap',marginBottom:'5px'}}>
-                    <span style={{fontWeight:'700',color:'#1E293B',fontSize:'14px'}}>{p.recipient}</span>
-                    <span style={{padding:'2px 7px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#F3F4F6',color:'#374151'}}>{p.recipientType}</span>
-                    <span style={{padding:'2px 7px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#F3F4F6',color:'#374151'}}>{p.paymentType}</span>
-                    <span style={{padding:'2px 7px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:sc.bg,color:sc.c}}>{srcLabel[p.fundingSource]||p.fundingSource}</span>
-                    <span style={{fontSize:'11px',color:'#94A3B8'}}>{p.fyYear}</span>
-                    {crs&&<span style={{padding:'2px 7px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:crs.bg,color:crs.color}}>{crs.label}</span>}
+                  <div style={{display:'flex',alignItems:'center',gap:'7px',flexWrap:'wrap',marginBottom:'6px'}}>
+                    <span style={{fontWeight:'700',color:'#1E293B',fontSize:'15px'}}>{p.recipient}</span>
+                    <span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#1A6B7A',color:'white'}}>{p.fyYear}</span>
+                    <span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:tc.bg,color:tc.c}}>{p.paymentType}</span>
+                    <span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:sc.bg,color:sc.c}}>{srcLabel[p.fundingSource]||p.fundingSource}</span>
+                    <span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#F3F4F6',color:'#374151'}}>{p.recipientType}</span>
+                    {crs&&<span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:crs.bg,color:crs.color}}>{crs.label}</span>}
                   </div>
-                  <div style={{fontSize:'13px',color:'#475569',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'500px'}}>{p.description}</div>
-                  {(p.notes||[]).length>0&&<div style={{fontSize:'11px',color:'#94A3B8',marginTop:'4px'}}>{p.notes.length} note{p.notes.length!==1?'s':''}</div>}
+                  <div style={{fontSize:'13px',color:'#475569',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'520px'}}>{p.description}</div>
+                  <div style={{display:'flex',gap:'12px',marginTop:'5px',flexWrap:'wrap'}}>
+                    {(p.notes||[]).length>0&&<span style={{fontSize:'11px',color:'#1D4ED8',fontWeight:'600'}}>💬 {p.notes.length} note{p.notes.length!==1?'s':''}</span>}
+                    {matchedTxn&&<span style={{fontSize:'11px',color:'#047857',fontWeight:'600'}}>✓ Ledger matched · {matchedTxn.date}</span>}
+                    {p.agreementRef&&<span style={{fontSize:'11px',color:'#94A3B8'}}>Ref: {p.agreementRef}</span>}
+                  </div>
                 </div>
                 <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'6px',flexShrink:0}}>
                   <div style={{fontWeight:'700',fontSize:'16px',color:'#1E293B'}}>{fmt(parseFloat(p.amount)||0)}</div>
-                  <span style={{padding:'3px 10px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:ps.bg,color:ps.color}}>{ps.label}</span>
-                  {p.status==='paid'&&p.paidAmount&&p.paidAmount!==p.amount&&<div style={{fontSize:'11px',color:'#059669'}}>Paid: {fmt(parseFloat(p.paidAmount)||0)}</div>}
+                  <span style={{padding:'4px 12px',borderRadius:'20px',fontSize:'12px',fontWeight:'700',background:ps.bg,color:ps.color}}>{ps.label}</span>
+                  {status==='paid'&&p.paidAmount&&parseFloat(p.paidAmount)!==parseFloat(p.amount)&&<div style={{fontSize:'11px',color:'#059669'}}>Paid: {fmt(parseFloat(p.paidAmount)||0)}</div>}
                 </div>
                 <div style={{color:'#94A3B8',fontSize:'14px',flexShrink:0,marginTop:'2px'}}>{isExpanded?'▲':'▼'}</div>
-              </div>
-
-              {/* Lifecycle bar */}
-              <div style={{display:'flex',padding:'0 16px 10px',gap:'4px',alignItems:'center'}}>
-                {STATUS_ORDER.map((s,i)=>{
-                  const done=i<=curStep;const current=s===p.status;
-                  const ps2=PAY_STATUSES[s];
-                  return(<React.Fragment key={s}>
-                    <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:'2px'}}>
-                      <div style={{width:'10px',height:'10px',borderRadius:'50%',background:done?ps2.color:'#E2E8F0',border:current?`2px solid ${ps2.color}`:'none',transition:'all .2s'}}/>
-                      <span style={{fontSize:'9px',color:done?ps2.color:'#CBD5E1',fontWeight:current?'700':'400',whiteSpace:'nowrap'}}>{ps2.label}</span>
-                    </div>
-                    {i<STATUS_ORDER.length-1&&<div style={{flex:1,height:'2px',background:i<curStep?'#93C5FD':'#E2E8F0',marginBottom:'14px'}}/>}
-                  </React.Fragment>);
-                })}
               </div>
 
               {/* Expanded details */}
@@ -1852,13 +1946,14 @@ function PartnerPaymentsTab({payments,userRole}){
                 <div style={{borderTop:'1px solid #F1F5F9',padding:'16px',display:'flex',flexDirection:'column',gap:'14px'}}>
                   {/* Details row */}
                   <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'10px',background:'#F8FAFC',borderRadius:'8px',padding:'12px'}}>
-                    {[['Agreement Ref',p.agreementRef||'—'],['Expected Date',p.expectedDate||'—'],['Paid Date',p.paidDate||'—'],['Ledger Txn ID',p.txnId||'—']].map(([l,v])=>(
-                      <div key={l}><div style={{fontSize:'10px',color:'#94A3B8',fontWeight:'600',marginBottom:'2px'}}>{l}</div><div style={{fontSize:'12px',fontWeight:'600',color:v==='—'?'#CBD5E1':'#1E293B',fontFamily:l==='Ledger Txn ID'?'monospace':'inherit'}}>{v}</div></div>
+                    {[['Agreement Ref',p.agreementRef||'—'],['Expected Date',p.expectedDate||'—'],['Paid Date',p.paidDate||'—'],['Ledger Match',matchedTxn?matchedTxn.date+' · '+fmt(matchedTxn.amt):(p.txnId||'—')]].map(([l,v])=>(
+                      <div key={l}><div style={{fontSize:'10px',color:'#94A3B8',fontWeight:'600',marginBottom:'2px'}}>{l}</div><div style={{fontSize:'12px',fontWeight:'600',color:v==='—'?'#CBD5E1':'#1E293B'}}>{v}</div></div>
                     ))}
                   </div>
+                  {matchedTxn&&<div style={{fontSize:'12px',color:'#475569',background:'#ECFDF5',border:'1px solid #A7F3D0',borderRadius:'8px',padding:'8px 12px'}}><strong style={{color:'#047857'}}>Matched 0110238 transaction:</strong> {matchedTxn.date} · {fmt(matchedTxn.amt)} · {matchedTxn.desc}</div>}
 
                   {/* COE Reimbursement tracker — only for paid, COE-funded payments */}
-                  {p.fundingSource==='coe'&&p.status==='paid'&&(
+                  {p.fundingSource==='coe'&&status==='paid'&&(
                     <div style={{background:'#FFFBEB',border:'1px solid #FDE68A',borderRadius:'10px',padding:'14px'}}>
                       <div style={{fontWeight:'700',color:'#92400E',fontSize:'12px',marginBottom:'8px',letterSpacing:'0.03em',textTransform:'uppercase'}}>COE Reimbursement Status</div>
                       <div style={{display:'flex',alignItems:'center',gap:'10px',flexWrap:'wrap'}}>
@@ -1871,40 +1966,19 @@ function PartnerPaymentsTab({payments,userRole}){
                     </div>
                   )}
 
-                  {/* Status update */}
-                  {canManage&&p.status!=='paid'&&(
-                    isStatusEdit?(
-                      <div style={{background:'#FFFBEB',border:'1px solid #FDE68A',borderRadius:'10px',padding:'14px',display:'flex',flexDirection:'column',gap:'10px'}}>
-                        <div style={{fontWeight:'600',color:'#92400E',fontSize:'13px'}}>Update Status</div>
-                        <div style={{display:'grid',gridTemplateColumns:'1fr 2fr auto',gap:'8px',alignItems:'flex-end'}}>
-                          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>New Status</label>
-                            <select value={statusForm.status} onChange={e=>setStatusForm(f=>({...f,status:e.target.value}))} style={inp}>
-                              <option value="">Select status...</option>
-                              {STATUS_ORDER.filter(s=>PAY_STATUSES[s].step>curStep).map(s=><option key={s} value={s}>{PAY_STATUSES[s].label}</option>)}
-                            </select>
-                          </div>
-                          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Action taken / Note</label><input value={statusForm.note} onChange={e=>setStatusForm(f=>({...f,note:e.target.value}))} placeholder="Describe what was done to advance this payment..." style={inp}/></div>
-                          <div style={{display:'flex',gap:'6px'}}>
-                            <button onClick={()=>{setStatusEditId(null);setStatusForm({status:'',note:''}); }} style={{border:'1px solid #E2E8F0',background:'white',borderRadius:'7px',padding:'7px 12px',cursor:'pointer',color:'#64748B',fontSize:'12px'}}>Cancel</button>
-                            <button onClick={()=>handleStatusUpdate(p)} disabled={!statusForm.status} style={{background:statusForm.status?'#D97706':'#E2E8F0',color:statusForm.status?'white':'#94A3B8',border:'none',borderRadius:'7px',padding:'7px 12px',fontWeight:'600',cursor:statusForm.status?'pointer':'not-allowed',fontSize:'12px'}}>Update</button>
-                          </div>
-                        </div>
-                      </div>
-                    ):(<button onClick={()=>{setStatusEditId(p.id);setStatusForm({status:'',note:''}); }} style={{background:'#FFF7ED',border:'1px solid #FED7AA',borderRadius:'8px',padding:'8px 14px',cursor:'pointer',color:'#D97706',fontSize:'12px',fontWeight:'600',alignSelf:'flex-start'}}>Update Status →</button>)
-                  )}
-
-                  {/* Status history */}
+                  {/* Activity record (kept from lifecycle era + paid/unpaid changes) */}
                   {(p.statusHistory||[]).length>0&&(
                     <div>
-                      <div style={{fontSize:'11px',color:'#64748B',fontWeight:'700',letterSpacing:'0.05em',textTransform:'uppercase',marginBottom:'8px'}}>Status History</div>
+                      <div style={{fontSize:'11px',color:'#64748B',fontWeight:'700',letterSpacing:'0.05em',textTransform:'uppercase',marginBottom:'8px'}}>Activity Record</div>
                       <div style={{display:'flex',flexDirection:'column',gap:'6px'}}>
                         {[...(p.statusHistory||[])].reverse().map((h,i)=>{
-                          const hs=PAY_STATUSES[h.status]||PAY_STATUSES.draft;
+                          const hs=PAY_STATUSES[normPayStatus(h.status)];
+                          const legacyLabel={draft:'Draft',agreement:'Agreement Signed',submitted:'Submitted to AP',processing:'Processing',paid:'Paid',unpaid:'Unpaid'}[h.status]||h.status;
                           return(<div key={i} style={{display:'flex',gap:'10px',alignItems:'flex-start'}}>
                             <div style={{width:'8px',height:'8px',borderRadius:'50%',background:hs.color,flexShrink:0,marginTop:'4px'}}/>
                             <div style={{flex:1}}>
                               <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
-                                <span style={{fontWeight:'600',fontSize:'12px',color:hs.color}}>{hs.label}</span>
+                                <span style={{fontWeight:'600',fontSize:'12px',color:hs.color}}>{legacyLabel}</span>
                                 <span style={{fontSize:'11px',color:'#94A3B8'}}>{h.updatedAt} · {h.updatedBy}</span>
                               </div>
                               {h.note&&<div style={{fontSize:'12px',color:'#475569',marginTop:'2px'}}>{h.note}</div>}
@@ -1942,7 +2016,8 @@ function PartnerPaymentsTab({payments,userRole}){
 
                   {/* Card actions */}
                   {canManage&&(
-                    <div style={{display:'flex',gap:'8px',paddingTop:'4px',borderTop:'1px solid #F1F5F9'}}>
+                    <div style={{display:'flex',gap:'8px',paddingTop:'4px',borderTop:'1px solid #F1F5F9',alignItems:'center'}}>
+                      <button onClick={(e)=>{e.stopPropagation();togglePaid(p);}} style={{background:status==='paid'?'#FFF7ED':'#059669',border:status==='paid'?'1px solid #FED7AA':'none',borderRadius:'7px',padding:'6px 14px',cursor:'pointer',color:status==='paid'?'#D97706':'white',fontSize:'12px',fontWeight:'700'}}>{status==='paid'?'Revert to Unpaid':'Mark as Paid'}</button>
                       <button onClick={(e)=>{e.stopPropagation();startEdit(p);setExpandedId(null);setFormError('');}} style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'7px',padding:'6px 12px',cursor:'pointer',color:'#1D4ED8',fontSize:'12px',fontWeight:'600'}}>Edit Payment</button>
                       <button onClick={(e)=>{e.stopPropagation();handleDelete(p);}} style={{background:'none',border:'1px solid #FECACA',borderRadius:'7px',padding:'6px 12px',cursor:'pointer',color:'#991B1B',fontSize:'12px'}}>Delete</button>
                     </div>
@@ -1955,6 +2030,7 @@ function PartnerPaymentsTab({payments,userRole}){
       </div>
     </div>
   );
+
 }
 
 // ── Activity Log Tab (Director only) ─────────────────────────────────────────
@@ -1975,6 +2051,12 @@ function LogTab({logs}){
     'event_deleted':{label:'Event Deleted',color:'#DC2626',bg:'#FEE2E2'},
     'tag_changed':{label:'Tag Updated',color:'#7C3AED',bg:'#EDE9FE'},
     'data_imported':{label:'Data Imported',color:'#374151',bg:'#F3F4F6'},
+    'payment_added':{label:'Payment Added',color:'#059669',bg:'#D1FAE5'},
+    'payment_edited':{label:'Payment Edited',color:'#1D4ED8',bg:'#DBEAFE'},
+    'payment_deleted':{label:'Payment Deleted',color:'#DC2626',bg:'#FEE2E2'},
+    'payment_status':{label:'Payment Status Changed',color:'#D97706',bg:'#FEF3C7'},
+    'payment_note':{label:'Payment Note Added',color:'#64748B',bg:'#F1F5F9'},
+    'coe_reimb_status':{label:'COE Reimbursement Updated',color:'#92400E',bg:'#FEF3C7'},
   };
 
   const actionTypes=useMemo(()=>[...new Set(logs.map(l=>l.action))].sort(),[logs]);
@@ -2161,11 +2243,18 @@ function App(){
   function updEnrichments(fn){setEnrichments(p=>{const n=typeof fn==='function'?fn(p):fn;if(enrTimer.current)clearTimeout(enrTimer.current);enrTimer.current=setTimeout(()=>FS.enr(n),1500);return n;});}
   async function handleImport(rows,mode){
     const BSIZE=499;
-    if(mode==='replace'){const ex=await _db.collection('transactions').get().catch(()=>({docs:[]}));const nIds=new Set(rows.map(r=>r.id));const tDel=ex.docs.filter(d=>!nIds.has(d.id));for(let i=0;i<tDel.length;i+=BSIZE){const b=_db.batch();tDel.slice(i,i+BSIZE).forEach(d=>b.delete(d.ref));await b.commit();}}
+    // Batches aren't atomic across commits, so order matters for failure
+    // recovery: WRITE the new dataset first, DELETE orphans last. A mid-import
+    // failure then leaves a harmless superset (re-run Replace to finish)
+    // instead of a dataset with rows already deleted but not yet rewritten.
+    const orphans=mode==='replace'
+      ?(await _db.collection('transactions').get().catch(()=>({docs:[]}))).docs.filter(d=>!new Set(rows.map(r=>r.id)).has(d.id))
+      :[];
     const exist=mode==='incremental'?new Set(transactions.map(t=>t.id)):new Set();
     const toW=mode==='incremental'?rows.filter(r=>!exist.has(r.id)):rows;
     for(let i=0;i<toW.length;i+=BSIZE){const b=_db.batch();toW.slice(i,i+BSIZE).forEach(r=>b.set(_db.collection('transactions').doc(r.id),r));await b.commit();}
-    logActivity('data_imported',`Imported ${toW.length} transactions (${mode} mode)`,{count:toW.length,mode});
+    for(let i=0;i<orphans.length;i+=BSIZE){const b=_db.batch();orphans.slice(i,i+BSIZE).forEach(d=>b.delete(d.ref));await b.commit();}
+    logActivity('data_imported',`Imported ${toW.length} transactions (${mode} mode)`,{count:toW.length,mode,orphansRemoved:orphans.length});
   }
 
   function jumpToEnrich(id){
@@ -2183,6 +2272,13 @@ function App(){
   useEffect(()=>{if(visibleTabs.length&&!visibleTabs.find(t=>t.id===activeTab))setActiveTab(visibleTabs[0].id);},[userRole]);
 
   const untaggedCount=useMemo(()=>transactions.filter(t=>!(auditTags[t.id]&&auditTags[t.id].length>0)).length,[transactions,auditTags]);
+  // Header range derives from data actually loaded, so it never goes stale
+  const fyRangeLabel=useMemo(()=>{
+    const fys=[...new Set(transactions.map(t=>t.fy))].filter(f=>/^FY\d\d\/\d\d$/.test(f)).sort();
+    if(fys.length===0) return '';
+    const expand=f=>`FY20${f.slice(2,4)}-${f.slice(5)}`;
+    return fys.length===1?expand(fys[0]):`${expand(fys[0])} through ${expand(fys[fys.length-1])}`;
+  },[transactions]);
   const untaggedLabel=untaggedCount>=1000?(untaggedCount/1000).toFixed(1)+'k':String(untaggedCount);
   const canManage=userRole==='director'||userRole==='admin_support';
   const activeTabInfo=visibleTabs.find(t=>t.id===activeTab)||visibleTabs[0]||TABS[0];
@@ -2236,14 +2332,14 @@ function App(){
           <span style={{fontSize:'18px'}}>{activeTabInfo.icon}</span>
           <h1 style={{fontSize:'15px',fontWeight:'700',color:'#1E293B',margin:0}}>{activeTabInfo.label}</h1>
           <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:'10px'}}>
-            <span style={{fontSize:'11px',color:'#94A3B8'}}>FY2023-24 through FY2025-26 · Fund 94 · SACS</span>
+            <span style={{fontSize:'11px',color:'#94A3B8'}}>{fyRangeLabel?fyRangeLabel+' · ':''}Fund 94 · SACS</span>
             {canManage&&<button onClick={()=>setShowUpload(true)} style={{fontSize:'12px',border:'1px solid #E2E8F0',color:'#64748B',padding:'5px 10px',borderRadius:'7px',background:'white',cursor:'pointer',fontWeight:'600'}} onMouseOver={e=>e.currentTarget.style.background='#F8FAFC'} onMouseOut={e=>e.currentTarget.style.background='white'}>Import</button>}
           </div>
         </div>
         <div style={{flex:1,overflowY:'auto',padding:'24px'}}>
           {activeTab==='overview'  &&<OverviewTab    txns={transactions} todos={todos} setTodos={updTodos} auditTags={auditTags} userRole={userRole} payments={payments} teamMembers={teamMembers} currentUid={user.uid} onJumpToAllocation={jumpToAllocation}/>}
           {activeTab==='fiscal'    &&<FiscalHealthTab txns={transactions} amendments={amendments} setAmendments={updAmendments} initialView={fiscalView} onViewChange={setFiscalView}/>}
-          {activeTab==='payments'  &&<PartnerPaymentsTab payments={payments} userRole={userRole}/>}
+          {activeTab==='payments'  &&<PartnerPaymentsTab payments={payments} userRole={userRole} txns={transactions}/>}
           {activeTab==='dataaudit' &&<DataAuditTab   txns={transactions} enrichments={enrichments} setEnrichments={updEnrichments} auditTags={auditTags} setAuditTags={updTags} jumpToId={jumpToId} clearJump={()=>setJumpToId(null)} initialView={dataAuditView} onViewChange={setDataAuditView} onJumpToEnrich={jumpToEnrich}/>}
           {activeTab==='log'       &&<LogTab logs={activityLogs}/>}
         </div>
