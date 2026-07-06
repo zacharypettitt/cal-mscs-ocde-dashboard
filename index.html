@@ -1669,7 +1669,7 @@ const STATUS_ORDER=['unpaid','paid'];
 function normPayStatus(s){return s==='paid'?'paid':'unpaid';}
 const PAY_TYPES=['Stipend','Travel','Services','Materials','Other'];
 const RECIP_TYPES=['LEA','COE','Individual','Vendor','Other'];
-const EMPTY_PAY={recipient:'',recipientType:'Individual',paymentType:'Services',description:'',amount:'',fundingSource:'primary',fyYear:'',agreementRef:'',mouId:'',expectedDate:'',txnId:'',paidDate:'',paidAmount:''};
+const EMPTY_PAY={recipient:'',organization:'',contactName:'',recipientType:'Individual',paymentType:'Services',description:'',amount:'',fundingSource:'primary',fyYear:'',agreementRef:'',mouId:'',expectedDate:'',txnId:'',paidDate:'',paidAmount:''};
 
 // ── Payment Form (standalone component — MUST be outside PartnerPaymentsTab) ──
 // Extracting this fixes a React bug where inline component definitions inside a
@@ -1697,11 +1697,37 @@ function PayForm({form,setForm,onSave,onCancel,saveLabel,txns,mous}){
   }
   return(
     <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
-      <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr',gap:'10px'}}>
-        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Recipient Name *</label><input value={form.recipient} onChange={e=>setForm(p=>({...p,recipient:e.target.value}))} placeholder="Organization or individual name" style={inp}/></div>
-        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Recipient Type</label><select value={form.recipientType} onChange={e=>setForm(p=>({...p,recipientType:e.target.value}))} style={inp}>{RECIP_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
-        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Payment Type</label><select value={form.paymentType} onChange={e=>setForm(p=>({...p,paymentType:e.target.value}))} style={inp}>{PAY_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
-      </div>
+      {(()=>{
+        // LEA/COE payments go to an organization with a named contact person;
+        // Individual payments just need the person's name. Vendor/Other keep the
+        // generic single recipient field. Switching types migrates the typed
+        // value across so nothing gets lost mid-entry.
+        const isOrg=form.recipientType==='LEA'||form.recipientType==='COE';
+        function switchType(t){
+          const wasOrg=form.recipientType==='LEA'||form.recipientType==='COE';
+          const willOrg=t==='LEA'||t==='COE';
+          setForm(p=>{
+            const next={...p,recipientType:t};
+            if(willOrg&&!wasOrg&&!p.organization&&p.recipient){next.organization=p.recipient;next.recipient='';}
+            if(!willOrg&&wasOrg&&!p.recipient&&p.organization){next.recipient=p.organization;}
+            return next;
+          });
+        }
+        return(
+          <div style={{display:'grid',gridTemplateColumns:isOrg?'2fr 2fr 1fr 1fr':'2fr 1fr 1fr',gap:'10px'}}>
+            {isOrg?(
+              <React.Fragment>
+                <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Organization *</label><input value={form.organization} onChange={e=>setForm(p=>({...p,organization:e.target.value}))} placeholder={form.recipientType==='COE'?'e.g. San Joaquin COE':'e.g. Saddleback Valley USD'} style={inp}/></div>
+                <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Individual / Contact</label><input value={form.contactName} onChange={e=>setForm(p=>({...p,contactName:e.target.value}))} placeholder="Contact person at the organization" style={inp}/></div>
+              </React.Fragment>
+            ):(
+              <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>{form.recipientType==='Individual'?'Individual Name *':'Recipient Name *'}</label><input value={form.recipient} onChange={e=>setForm(p=>({...p,recipient:e.target.value}))} placeholder={form.recipientType==='Individual'?'Person receiving this payment':'Organization or individual name'} style={inp}/></div>
+            )}
+            <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Recipient Type</label><select value={form.recipientType} onChange={e=>switchType(e.target.value)} style={inp}>{RECIP_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
+            <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Payment Type</label><select value={form.paymentType} onChange={e=>setForm(p=>({...p,paymentType:e.target.value}))} style={inp}>{PAY_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
+          </div>
+        );
+      })()}
       <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Description / Purpose *</label><textarea value={form.description} onChange={e=>setForm(p=>({...p,description:e.target.value}))} placeholder="Describe what this payment is for..." rows={2} style={{...inp,resize:'none'}}/></div>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:'10px'}}>
         <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Expected Amount *</label><input type="number" value={form.amount} onChange={e=>setForm(p=>({...p,amount:e.target.value}))} placeholder="0.00" style={inp}/></div>
@@ -1762,7 +1788,7 @@ function PartnerPaymentsTab({payments,userRole,txns,mous}){
 
   const filtered=useMemo(()=>{
     let r=payments;
-    if(search){const q=search.toLowerCase();r=r.filter(p=>(p.recipient||'').toLowerCase().includes(q)||(p.description||'').toLowerCase().includes(q));}
+    if(search){const q=search.toLowerCase();r=r.filter(p=>(p.recipient||'').toLowerCase().includes(q)||(p.contactName||'').toLowerCase().includes(q)||(p.description||'').toLowerCase().includes(q));}
     if(filterSource) r=r.filter(p=>p.fundingSource===filterSource);
     if(filterStatus) r=r.filter(p=>normPayStatus(p.status)===filterStatus);
     if(filterType) r=r.filter(p=>p.paymentType===filterType);
@@ -1778,17 +1804,19 @@ function PartnerPaymentsTab({payments,userRole,txns,mous}){
 
   async function handleAdd(){
     setFormError('');
-    if(!form.recipient.trim()||!form.amount){setFormError('Recipient name and expected amount are required.');return;}
+    const isOrg=form.recipientType==='LEA'||form.recipientType==='COE';
+    const displayRecipient=(isOrg?form.organization:form.recipient).trim();
+    if(!displayRecipient||!form.amount){setFormError((isOrg?'Organization':'Recipient name')+' and expected amount are required.');return;}
     const u=_auth.currentUser;if(!u){setFormError('You are not signed in.');return;}
     const id='p'+Date.now();const now=new Date().toISOString().slice(0,10);
     // A ledger match at creation time means the payment already went out
     const initialStatus=form.txnId?'paid':'unpaid';
     try{
-      await FS.payment(id,{...form,id,amount:parseFloat(form.amount)||0,paidAmount:parseFloat(form.paidAmount)||0,status:initialStatus,
+      await FS.payment(id,{...form,recipient:displayRecipient,id,amount:parseFloat(form.amount)||0,paidAmount:parseFloat(form.paidAmount)||0,status:initialStatus,
         coeReimbursement:form.fundingSource==='coe'&&initialStatus==='paid'?'not_invoiced':null,
         statusHistory:[{status:initialStatus,note:initialStatus==='paid'?'Created with ledger match '+form.txnId:'Payment record created',updatedBy:u.displayName||u.email,updatedAt:now}],
         notes:[],createdAt:now,createdBy:u.displayName||u.email,createdByEmail:u.email});
-      logActivity('payment_added',`Added payment: "${form.recipient}" — ${fmt(parseFloat(form.amount)||0)}`,{type:form.paymentType,source:form.fundingSource,status:initialStatus});
+      logActivity('payment_added',`Added payment: "${displayRecipient}" — ${fmt(parseFloat(form.amount)||0)}`,{type:form.paymentType,source:form.fundingSource,status:initialStatus});
       setShowAdd(false);setForm({...EMPTY_PAY,fyYear:activeGrantFY()});
     }catch(err){
       setFormError('Could not save payment: '+(err&&err.message?err.message:'unknown error')+'. This is usually a permissions issue — confirm your role in Manage Team.');
@@ -1796,11 +1824,13 @@ function PartnerPaymentsTab({payments,userRole,txns,mous}){
   }
   async function handleUpdate(){
     setFormError('');
-    if(!form.recipient.trim()){setFormError('Recipient name is required.');return;}
+    const isOrg=form.recipientType==='LEA'||form.recipientType==='COE';
+    const displayRecipient=(isOrg?form.organization:form.recipient).trim();
+    if(!displayRecipient){setFormError((isOrg?'Organization':'Recipient name')+' is required.');return;}
     try{
       const before=payments.find(x=>x.id===editId);
       if(before) await saveEventHistory('updated',{...before,eventName:before.recipient});
-      const upd={recipient:form.recipient,recipientType:form.recipientType,paymentType:form.paymentType,description:form.description,amount:parseFloat(form.amount)||0,fundingSource:form.fundingSource,fyYear:form.fyYear,agreementRef:form.agreementRef,mouId:form.mouId||'',expectedDate:form.expectedDate,txnId:form.txnId||'',paidDate:form.paidDate||'',paidAmount:parseFloat(form.paidAmount)||0};
+      const upd={recipient:displayRecipient,organization:form.organization||'',contactName:form.contactName||'',recipientType:form.recipientType,paymentType:form.paymentType,description:form.description,amount:parseFloat(form.amount)||0,fundingSource:form.fundingSource,fyYear:form.fyYear,agreementRef:form.agreementRef,mouId:form.mouId||'',expectedDate:form.expectedDate,txnId:form.txnId||'',paidDate:form.paidDate||'',paidAmount:parseFloat(form.paidAmount)||0};
       // Matching a ledger transaction implies the payment was made
       if(form.txnId&&before&&normPayStatus(before.status)!=='paid'){
         upd.status='paid';
@@ -1808,7 +1838,7 @@ function PartnerPaymentsTab({payments,userRole,txns,mous}){
         if(before.fundingSource==='coe'&&!before.coeReimbursement) upd.coeReimbursement='not_invoiced';
       }
       await FS.paymentUpdate(editId,upd);
-      logActivity('payment_edited',`Edited payment: "${form.recipient}"`,{id:editId});
+      logActivity('payment_edited',`Edited payment: "${displayRecipient}"`,{id:editId});
       setEditId(null);
     }catch(err){
       setFormError('Could not save changes: '+(err&&err.message?err.message:'unknown error')+'. This is usually a permissions issue — confirm your role in Manage Team.');
@@ -1850,7 +1880,7 @@ async function handleCoeReimbUpdate(p,newStatus){
     logActivity('payment_note',`Added note to "${p.recipient}"`,{id:p.id});
     setNoteText('');setNoteInputId(null);
   }
-  function startEdit(p){setEditId(p.id);setForm({recipient:p.recipient||'',recipientType:p.recipientType||'Individual',paymentType:p.paymentType||'Services',description:p.description||'',amount:String(p.amount||''),fundingSource:p.fundingSource||'primary',fyYear:p.fyYear||activeGrantFY(),agreementRef:p.agreementRef||'',mouId:p.mouId||'',expectedDate:p.expectedDate||'',txnId:p.txnId||'',paidDate:p.paidDate||'',paidAmount:String(p.paidAmount||'')});}
+  function startEdit(p){const wasOrg=p.recipientType==='LEA'||p.recipientType==='COE';setEditId(p.id);setForm({recipient:wasOrg?'':(p.recipient||''),organization:p.organization||(wasOrg?(p.recipient||''):''),contactName:p.contactName||'',recipientType:p.recipientType||'Individual',paymentType:p.paymentType||'Services',description:p.description||'',amount:String(p.amount||''),fundingSource:p.fundingSource||'primary',fyYear:p.fyYear||activeGrantFY(),agreementRef:p.agreementRef||'',mouId:p.mouId||'',expectedDate:p.expectedDate||'',txnId:p.txnId||'',paidDate:p.paidDate||'',paidAmount:String(p.paidAmount||'')});}
 
   const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'7px 10px',fontSize:'13px',width:'100%'};
   const srcLabel={primary:'Primary Allocation',coe:'COE Reimbursement'};
@@ -1938,6 +1968,7 @@ async function handleCoeReimbUpdate(p,newStatus){
                   </div>
                   <div style={{fontSize:'13px',color:'#475569',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'520px'}}>{p.description}</div>
                   <div style={{display:'flex',gap:'12px',marginTop:'5px',flexWrap:'wrap'}}>
+                    {p.contactName&&<span style={{fontSize:'11px',color:'#475569',fontWeight:'600'}}>👤 {p.contactName}</span>}
                     {(p.notes||[]).length>0&&<span style={{fontSize:'11px',color:'#1D4ED8',fontWeight:'600'}}>💬 {p.notes.length} note{p.notes.length!==1?'s':''}</span>}
                     {matchedTxn&&<span style={{fontSize:'11px',color:'#047857',fontWeight:'600'}}>✓ Ledger matched · {matchedTxn.date}</span>}
                     {p.agreementRef&&<span style={{fontSize:'11px',color:'#94A3B8'}}>Ref: {p.agreementRef}</span>}
