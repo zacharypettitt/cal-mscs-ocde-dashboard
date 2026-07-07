@@ -82,6 +82,7 @@ const FS = {
   amendments:  (items) => _col('amendments').set({items}).catch(console.error),
   tags:        (data)  => _col('auditTags').set({data}).catch(console.error),
   enr:         (data)  => _col('enrichments').set({data}).catch(console.error),
+  accountGuide:(items) => _col('accountGuide').set({items}).catch(console.error),
 };
 </script>
 
@@ -196,6 +197,15 @@ const ROLE_TAB_ACCESS={director:null,admin_support:['overview','fiscal','payment
 // ── Account labels ────────────────────────────────────────────────────────────
 const ACCT_LABEL={"0110028":"Main Grant Revenue","0110029":"Main Grant Expenses","0110030":"Indirect Costs","0110237":"Reimbursed Revenue","0110238":"Reimbursed Expenses"};
 const ACCT_OPT=a=>`${ACCT_LABEL[a]} — ${a}`;
+// Editable "when to use each account" guide (managers can edit in Overview).
+// Falls back to this default until customized; stored in shared/accountGuide.
+const DEFAULT_ACCOUNT_GUIDE=[
+  {account:"0110028",title:"Main Grant Revenue",when:"Incoming CDE allocation deposits (the 9 scheduled payments). Cash receipts land here as CR entries."},
+  {account:"0110029",title:"Main Grant Expenses",when:"Primary grant spending — stipends, services, travel, materials paid from the CAL-MSCS allocation."},
+  {account:"0110030",title:"Indirect Costs",when:"Indirect cost charges against the primary allocation, tracked separately from direct 0110029 spending."},
+  {account:"0110237",title:"Reimbursed Revenue",when:"Reimbursement funds received from partner COEs/districts — pass-through revenue, separate from the CDE contract."},
+  {account:"0110238",title:"Reimbursed Expenses",when:"Payments made on behalf of partners that will be (or were) reimbursed. Partner-payment stipends flow here from FY24/25 onward."},
+];
 
 // ── Budget data ───────────────────────────────────────────────────────────────
 const BUDGET={
@@ -330,13 +340,12 @@ function computePaymentReconciliation(txns){
 }
 
 const AUDIT_TAGS=[
-  {id:"pending_reimb",label:"Pending Reimbursement",color:"#D97706",bg:"#FEF3C7"},
-  {id:"follow_up",label:"Follow Up Required",color:"#DC2626",bg:"#FEE2E2"},
-  {id:"awaiting_doc",label:"Awaiting Documentation",color:"#EA580C",bg:"#FFEDD5"},
   {id:"verified",label:"Verified",color:"#059669",bg:"#D1FAE5"},
-  {id:"disputed",label:"Disputed",color:"#2563EB",bg:"#DBEAFE"},
-  {id:"informational",label:"Informational",color:"#6B7280",bg:"#F3F4F6"},
+  {id:"unknown",label:"Unknown",color:"#6B7280",bg:"#F3F4F6"},
 ];
+// Tags no longer offered; any of these still stored on a transaction get
+// stripped on load (see sanitizeAuditTags in App) so the data stays clean.
+const RETIRED_TAG_IDS=["pending_reimb","follow_up","awaiting_doc","disputed","informational"];
 
 const TODO_CATS={
   invoicing:{label:"Invoicing",color:"#1D4ED8",bg:"#DBEAFE"},
@@ -422,7 +431,7 @@ function SortIcon({col,sortCol,sortDir}){
 
 // ── Overview Tab ─────────────────────────────────────────────────────────────
 // ── Overview Tab ─────────────────────────────────────────────────────────────
-function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMembers,currentUid,onJumpToAllocation}){
+function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMembers,currentUid,onJumpToAllocation,accountGuide,setAccountGuide}){
   const [showAdd,setShowAdd]=useState(false);
   const [showDone,setShowDone]=useState(false);
   const [editId,setEditId]=useState(null);
@@ -692,6 +701,52 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMember
             </div>
           ))}
         </div>
+      </div>
+      <AccountGuide guide={accountGuide} setGuide={setAccountGuide} userRole={userRole}/>
+    </div>
+  );
+}
+
+// ── Account Usage Guide (editable, managers only) ─────────────────────────────
+function AccountGuide({guide,setGuide,userRole}){
+  const canManage=userRole==='director'||userRole==='admin_support';
+  const [editing,setEditing]=useState(false);
+  const [draft,setDraft]=useState(guide);
+  useEffect(()=>{if(!editing)setDraft(guide);},[guide,editing]);
+  function save(){setGuide(draft);setEditing(false);logActivity('tag_changed','Updated the account usage guide',{});}
+  const rows=editing?draft:guide;
+  const td={padding:'11px 14px',fontSize:'13px',color:'#334155',borderBottom:'1px solid #F1F5F9',verticalAlign:'top'};
+  const th={padding:'10px 14px',fontSize:'11px',fontWeight:'700',color:'#64748B',textTransform:'uppercase',letterSpacing:'0.04em',textAlign:'left',background:'#F8FAFC',borderBottom:'1px solid #E2E8F0'};
+  const inp={border:'1px solid #E2E8F0',borderRadius:'6px',padding:'6px 8px',width:'100%',fontSize:'13px'};
+  function upd(i,field,val){setDraft(d=>d.map((r,idx)=>idx===i?{...r,[field]:val}:r));}
+  return(
+    <div style={{background:'white',borderRadius:'16px',border:'1px solid #E2E8F0',padding:'20px',marginTop:'2px'}}>
+      <div style={{display:'flex',alignItems:'center',marginBottom:'14px'}}>
+        <div>
+          <h3 style={{fontSize:'15px',fontWeight:'700',color:'#1E293B',margin:0}}>Account Usage Guide</h3>
+          <p style={{fontSize:'12px',color:'#64748B',margin:'2px 0 0'}}>When to use each SACS account. {canManage?'Editable — keep this current for your team.':''}</p>
+        </div>
+        {canManage&&!editing&&<button onClick={()=>setEditing(true)} style={{marginLeft:'auto',background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'8px',padding:'7px 14px',fontSize:'13px',fontWeight:'600',color:'#1D4ED8',cursor:'pointer'}}>Edit Guide</button>}
+        {canManage&&editing&&(
+          <div style={{marginLeft:'auto',display:'flex',gap:'8px'}}>
+            <button onClick={()=>{setEditing(false);setDraft(guide);}} style={{background:'white',border:'1px solid #E2E8F0',borderRadius:'8px',padding:'7px 14px',fontSize:'13px',fontWeight:'600',color:'#64748B',cursor:'pointer'}}>Cancel</button>
+            <button onClick={save} style={{background:'#1D4ED8',border:'none',borderRadius:'8px',padding:'7px 14px',fontSize:'13px',fontWeight:'700',color:'white',cursor:'pointer'}}>Save Guide</button>
+          </div>
+        )}
+      </div>
+      <div style={{border:'1px solid #E2E8F0',borderRadius:'12px',overflow:'hidden'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr><th style={{...th,width:'110px'}}>Account</th><th style={{...th,width:'170px'}}>Name</th><th style={th}>When to use it</th></tr></thead>
+          <tbody>
+            {rows.map((r,i)=>(
+              <tr key={r.account}>
+                <td style={{...td,fontFamily:'monospace',fontWeight:'700',color:'#0F172A'}}>{r.account}</td>
+                <td style={td}>{editing?<input value={r.title} onChange={e=>upd(i,'title',e.target.value)} style={inp}/>:<span style={{fontWeight:'600'}}>{r.title}</span>}</td>
+                <td style={td}>{editing?<textarea value={r.when} onChange={e=>upd(i,'when',e.target.value)} rows={2} style={{...inp,resize:'vertical'}}/>:r.when}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -1009,9 +1064,14 @@ function LedgerTab({txns,enrichments,auditTags,onJumpToEnrich}){
 }
 
 // ── Enrichment & Audit Tab ───────────────────────────────────────────────────
-function EnrichmentTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,jumpToId,clearJump}){
+function EnrichmentTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,jumpToId,clearJump,userRole}){
+  const canManage=userRole==='director'||userRole==='admin_support';
   const [filters,setFilters]=useState({search:'',account:'',fy:'',sacs:'',objCode:'',tagged:'all'});
   const [page,setPage]=useState(0);
+  const [selected,setSelected]=useState(()=>new Set());
+  const [batchDesc,setBatchDesc]=useState('');
+  const [batchNote,setBatchNote]=useState('');
+  const [batchMode,setBatchMode]=useState(null); // 'desc' | 'note' | null
   const rowRefs=useRef({});
   const PAGE=25;
   function setF(k,v){
@@ -1035,11 +1095,16 @@ function EnrichmentTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,j
     if(filters.objCode) r=r.filter(t=>t.obj===filters.objCode);
     if(filters.tagged==='tagged') r=r.filter(t=>(auditTags[t.id]||[]).length>0||enrichments[t.id]?.desc);
     if(filters.tagged==='untagged') r=r.filter(t=>!(auditTags[t.id]||[]).length&&!enrichments[t.id]?.desc);
+    if(filters.tagged==='verified') r=r.filter(t=>(auditTags[t.id]||[]).includes('verified'));
+    if(filters.tagged==='unverified') r=r.filter(t=>!(auditTags[t.id]||[]).includes('verified'));
     return r;
   },[txns,filters,enrichments,auditTags]);
 
   const pages=Math.ceil(filtered.length/PAGE);
   const shown=filtered.slice(page*PAGE,(page+1)*PAGE);
+  const shownIds=useMemo(()=>shown.map(t=>t.id),[shown]);
+  const allShownSelected=shownIds.length>0&&shownIds.every(id=>selected.has(id));
+  const someShownSelected=shownIds.some(id=>selected.has(id));
 
   useEffect(()=>{
     if(!jumpToId) return;
@@ -1060,7 +1125,52 @@ function EnrichmentTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,j
       return{...t,[id]:next};
     });
   }
+
+  // ── Selection helpers ──────────────────────────────────────────────────────
+  function toggleSelect(id){setSelected(s=>{const n=new Set(s);n.has(id)?n.delete(id):n.add(id);return n;});}
+  function toggleSelectAllShown(){setSelected(s=>{const n=new Set(s);if(allShownSelected)shownIds.forEach(id=>n.delete(id));else shownIds.forEach(id=>n.add(id));return n;});}
+  function clearSelection(){setSelected(new Set());}
+
+  // ── Batch verify (works on a given id list) ────────────────────────────────
+  function setVerifiedFor(ids,verified){
+    if(ids.length===0) return;
+    setAuditTags(t=>{
+      const next={...t};
+      ids.forEach(id=>{
+        const cur=next[id]||[];
+        if(verified) next[id]=cur.includes('verified')?cur:[...cur,'verified'];
+        else next[id]=cur.filter(x=>x!=='verified');
+        if(next[id].length===0) delete next[id];
+      });
+      return next;
+    });
+    logActivity('tag_changed',`${verified?'Verified':'Un-verified'} ${ids.length} transaction${ids.length!==1?'s':''} (batch)`,{count:ids.length,action:verified?'added':'removed',tag:'verified'});
+  }
+  const verifyAllFiltered=()=>setVerifiedFor(filtered.map(t=>t.id),true);
+  const unverifyAllFiltered=()=>setVerifiedFor(filtered.map(t=>t.id),false);
+  const verifySelected=()=>{setVerifiedFor([...selected],true);};
+  const unverifySelected=()=>{setVerifiedFor([...selected],false);};
+
+  // ── Batch description / note (applies to selection) ────────────────────────
+  function applyBatchDesc(){
+    const ids=[...selected];
+    if(ids.length===0||!batchDesc.trim()) return;
+    setEnrichments(e=>{const n={...e};ids.forEach(id=>{n[id]={...(n[id]||{}),desc:batchDesc.trim()};});return n;});
+    logActivity('tag_changed',`Applied batch description to ${ids.length} transaction${ids.length!==1?'s':''}`,{count:ids.length});
+    setBatchDesc('');setBatchMode(null);
+  }
+  function applyBatchNote(){
+    const ids=[...selected];
+    if(ids.length===0||!batchNote.trim()) return;
+    // Append to any existing note rather than overwrite, so batch tagging is additive
+    setEnrichments(e=>{const n={...e};ids.forEach(id=>{const prev=(n[id]||{}).notes||'';n[id]={...(n[id]||{}),notes:prev?prev+'\n'+batchNote.trim():batchNote.trim()};});return n;});
+    logActivity('tag_changed',`Applied batch note to ${ids.length} transaction${ids.length!==1?'s':''}`,{count:ids.length});
+    setBatchNote('');setBatchMode(null);
+  }
+
   const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'8px 12px',width:'100%',fontSize:'13px'};
+  const selCount=selected.size;
+
   return(
     <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
       <div style={{display:'flex',alignItems:'center',gap:'10px',flexWrap:'wrap'}}>
@@ -1076,51 +1186,93 @@ function EnrichmentTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,j
         <select value={filters.fy} onChange={e=>setF('fy',e.target.value)} style={inp}><option value="">All Years</option>{FY_LIST.map(f=><option key={f} value={f}>{f}</option>)}</select>
         <select value={filters.sacs} onChange={e=>setF('sacs',e.target.value)} style={inp}>{SACS_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
       </div>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'8px',alignItems:'center'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px',alignItems:'center'}}>
         <select value={filters.objCode} onChange={e=>setF('objCode',e.target.value)} style={inp}>
           <option value="">{filters.sacs?`All codes in ${filters.sacs}`:'All Object Codes'}</option>
           {objCodes.map(([code,desc])=><option key={code} value={code}>{code}{desc?' — '+desc:''}</option>)}
         </select>
-        <div style={{display:'flex',gap:'8px'}}>
-          {[['all','All'],['tagged','Enriched / Tagged'],['untagged','Not Yet Enriched']].map(([v,l])=>(
+        <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
+          {[['all','All'],['verified','Verified'],['unverified','Unverified'],['tagged','Enriched'],['untagged','Untouched']].map(([v,l])=>(
             <button key={v} onClick={()=>setF('tagged',v)} style={{padding:'6px 12px',borderRadius:'20px',fontSize:'12px',fontWeight:'600',border:'1px solid',cursor:'pointer',background:filters.tagged===v?'#1E293B':'white',color:filters.tagged===v?'white':'#64748B',borderColor:filters.tagged===v?'#1E293B':'#E2E8F0',whiteSpace:'nowrap'}}>{l}</button>
           ))}
         </div>
       </div>
+
+      {/* ── Batch action bar ──────────────────────────────────────────────── */}
+      {canManage&&(
+        <div style={{background:'#F8FAFC',border:'1px solid #E2E8F0',borderRadius:'10px',padding:'12px 14px',display:'flex',flexDirection:'column',gap:'10px'}}>
+          <div style={{display:'flex',alignItems:'center',gap:'10px',flexWrap:'wrap'}}>
+            <label style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',fontWeight:'600',color:'#334155',cursor:'pointer'}}>
+              <input type="checkbox" checked={allShownSelected} ref={el=>{if(el)el.indeterminate=someShownSelected&&!allShownSelected;}} onChange={toggleSelectAllShown}/>
+              Select page ({shownIds.length})
+            </label>
+            <span style={{fontSize:'12px',color:selCount>0?'#1D4ED8':'#94A3B8',fontWeight:'700'}}>{selCount} selected</span>
+            {selCount>0&&<button onClick={clearSelection} style={{fontSize:'11px',color:'#64748B',background:'none',border:'none',cursor:'pointer',textDecoration:'underline'}}>clear</button>}
+            <div style={{width:'1px',height:'20px',background:'#E2E8F0'}}/>
+            {/* Verify batch */}
+            <button onClick={verifySelected} disabled={selCount===0} style={btnStyle(selCount>0,'#059669')}>✓ Verify Selected</button>
+            <button onClick={unverifySelected} disabled={selCount===0} style={btnStyle(selCount>0,'#64748B')}>Un-verify Selected</button>
+            <button onClick={()=>setBatchMode(batchMode==='desc'?null:'desc')} disabled={selCount===0} style={btnStyle(selCount>0,'#1D4ED8')}>Batch Description…</button>
+            <button onClick={()=>setBatchMode(batchMode==='note'?null:'note')} disabled={selCount===0} style={btnStyle(selCount>0,'#7C3AED')}>Batch Note…</button>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:'10px',flexWrap:'wrap',borderTop:'1px dashed #E2E8F0',paddingTop:'10px'}}>
+            <span style={{fontSize:'11px',color:'#94A3B8',fontWeight:'600'}}>Whole filtered set ({filtered.length.toLocaleString()}):</span>
+            <button onClick={verifyAllFiltered} style={btnStyle(true,'#059669')}>✓ Verify All Filtered</button>
+            <button onClick={unverifyAllFiltered} style={btnStyle(true,'#64748B')}>Un-verify All Filtered</button>
+          </div>
+          {batchMode==='desc'&&(
+            <div style={{display:'flex',gap:'8px',alignItems:'center',background:'#EFF6FF',borderRadius:'8px',padding:'10px'}}>
+              <input value={batchDesc} onChange={e=>setBatchDesc(e.target.value)} placeholder={`Description to apply to ${selCount} selected transaction${selCount!==1?'s':''} (replaces existing)`} style={{...inp,flex:1}}/>
+              <button onClick={applyBatchDesc} disabled={!batchDesc.trim()} style={btnStyle(!!batchDesc.trim(),'#1D4ED8')}>Apply to {selCount}</button>
+            </div>
+          )}
+          {batchMode==='note'&&(
+            <div style={{display:'flex',gap:'8px',alignItems:'center',background:'#F5F3FF',borderRadius:'8px',padding:'10px'}}>
+              <input value={batchNote} onChange={e=>setBatchNote(e.target.value)} placeholder={`Note to append to ${selCount} selected transaction${selCount!==1?'s':''}`} style={{...inp,flex:1}}/>
+              <button onClick={applyBatchNote} disabled={!batchNote.trim()} style={btnStyle(!!batchNote.trim(),'#7C3AED')}>Append to {selCount}</button>
+            </div>
+          )}
+        </div>
+      )}
+
       <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
         {shown.map(t=>{
           const enr=enrichments[t.id]||{};const tags=auditTags[t.id]||[];const hasData=tags.length>0||enr.desc;
+          const isSel=selected.has(t.id);const isVerified=tags.includes('verified');
           return(
-            <div key={t.id} ref={el=>rowRefs.current[t.id]=el} style={{background:hasData?'#FAFCFF':'white',borderRadius:'12px',border:hasData?'1px solid #BFDBFE':'1px solid #E2E8F0',padding:'14px'}}>
-              <div style={{display:'grid',gridTemplateColumns:'110px 1fr 1.8fr 1.4fr 80px',gap:'14px',alignItems:'start'}}>
+            <div key={t.id} ref={el=>rowRefs.current[t.id]=el} style={{background:isSel?'#EFF6FF':isVerified?'#F0FDF4':hasData?'#FAFCFF':'white',borderRadius:'12px',border:isSel?'1px solid #93C5FD':isVerified?'1px solid #A7F3D0':hasData?'1px solid #BFDBFE':'1px solid #E2E8F0',padding:'14px'}}>
+              {/* Readable header strip: date · account · type · object code · amount */}
+              <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'10px',flexWrap:'wrap'}}>
+                {canManage&&<input type="checkbox" checked={isSel} onChange={()=>toggleSelect(t.id)} style={{cursor:'pointer',flexShrink:0}}/>}
+                <span style={{fontSize:'13px',fontWeight:'700',color:'#1E293B'}}>{t.date}</span>
+                <AcctBadge account={t.account}/>
+                <span style={{fontSize:'11px',color:'#64748B',background:'#F1F5F9',padding:'2px 8px',borderRadius:'6px',fontWeight:'600'}}>{t.type}</span>
+                <span style={{fontSize:'12px',fontFamily:'monospace',fontWeight:'700',color:'#0F172A',background:'#F1F5F9',padding:'2px 8px',borderRadius:'6px'}}>obj {t.obj}</span>
+                <span style={{fontSize:'12px',color:'#475569'}}>{t.obj_desc}</span>
+                <span style={{fontSize:'11px',color:'#94A3B8'}}>· {t.sacs_label}</span>
+                <span style={{marginLeft:'auto',fontWeight:'700',fontSize:'15px',color:t.amt<0?'#DC2626':'#1E293B'}}>{fmt(t.amt)}</span>
+              </div>
+              {/* Original description — full width, readable */}
+              <div style={{marginBottom:'10px'}}>
+                <div style={{fontSize:'10px',color:'#94A3B8',fontWeight:'600',marginBottom:'3px'}}>ORIGINAL DESCRIPTION (read-only)</div>
+                <div style={{fontSize:'13px',fontFamily:'monospace',background:'#F8FAFC',borderRadius:'6px',padding:'8px 10px',color:'#334155',lineHeight:'1.4'}}>{t.desc}</div>
+              </div>
+              {/* Editable enrichment + tags */}
+              <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:'12px',alignItems:'start'}}>
                 <div>
-                  <div style={{fontSize:'11px',color:'#94A3B8',marginBottom:'6px'}}>{t.date.slice(5)}</div>
-                  <AcctBadge account={t.account}/>
-                  <div style={{fontSize:'10px',color:'#94A3B8',marginTop:'4px'}}>{t.type}</div>
-                  <div style={{fontSize:'10px',fontFamily:'monospace',fontWeight:'600',color:'#475569',marginTop:'3px',background:'#F8FAFC',padding:'1px 5px',borderRadius:'3px',display:'inline-block'}}>{t.obj}</div>
-                </div>
-                <div>
-                  <div style={{fontSize:'10px',color:'#94A3B8',fontWeight:'600',marginBottom:'4px'}}>Original (read-only)</div>
-                  <div style={{fontSize:'11px',fontFamily:'monospace',background:'#F8FAFC',borderRadius:'6px',padding:'5px 8px',color:'#475569',wordBreak:'break-all'}}>{t.desc}</div>
-                  <div style={{fontSize:'11px',color:'#94A3B8',marginTop:'4px'}}>{t.obj_desc} · {t.sacs_label}</div>
-                </div>
-                <div>
-                  <div style={{fontSize:'10px',color:'#94A3B8',fontWeight:'600',marginBottom:'4px'}}>Full description (editable)</div>
+                  <div style={{fontSize:'10px',color:'#94A3B8',fontWeight:'600',marginBottom:'3px'}}>FULL DESCRIPTION & NOTES (editable)</div>
                   <input value={enr.desc||''} onChange={e=>updateEnr(t.id,'desc',e.target.value)} placeholder="Expand the truncated description here..." style={{...inp,marginBottom:'6px'}}/>
-                  <textarea value={enr.notes||''} onChange={e=>updateEnr(t.id,'notes',e.target.value)} placeholder="Notes..." rows={1} style={{...inp,resize:'none'}}/>
+                  <textarea value={enr.notes||''} onChange={e=>updateEnr(t.id,'notes',e.target.value)} placeholder="Notes..." rows={1} style={{...inp,resize:'vertical'}}/>
                 </div>
                 <div>
                   <div style={{fontSize:'10px',color:'#94A3B8',fontWeight:'600',marginBottom:'6px'}}>Audit Tags</div>
-                  <div style={{display:'flex',flexWrap:'wrap',gap:'4px'}}>
+                  <div style={{display:'flex',flexWrap:'wrap',gap:'6px'}}>
                     {AUDIT_TAGS.map(tag=>(
-                      <button key={tag.id} onClick={()=>toggleTag(t.id,tag.id)} style={{padding:'3px 8px',borderRadius:'20px',fontSize:'11px',fontWeight:'600',border:'1px solid',cursor:'pointer',background:tags.includes(tag.id)?tag.bg:'white',color:tags.includes(tag.id)?tag.color:'#94A3B8',borderColor:tags.includes(tag.id)?tag.color:'#E2E8F0'}}>
-                        {tag.label.split(' ')[0]}
+                      <button key={tag.id} onClick={()=>toggleTag(t.id,tag.id)} style={{padding:'4px 12px',borderRadius:'20px',fontSize:'12px',fontWeight:'600',border:'1px solid',cursor:'pointer',background:tags.includes(tag.id)?tag.bg:'white',color:tags.includes(tag.id)?tag.color:'#94A3B8',borderColor:tags.includes(tag.id)?tag.color:'#E2E8F0'}}>
+                        {tags.includes(tag.id)?(tag.id==='verified'?'✓ ':'')+tag.label:tag.label}
                       </button>
                     ))}
                   </div>
-                </div>
-                <div style={{textAlign:'right'}}>
-                  <div style={{fontWeight:'700',fontSize:'14px',color:t.amt<0?'#DC2626':'#1E293B'}}>{fmt(t.amt)}</div>
                 </div>
               </div>
             </div>
@@ -1139,6 +1291,7 @@ function EnrichmentTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,j
     </div>
   );
 }
+function btnStyle(enabled,color){return{padding:'6px 12px',borderRadius:'8px',fontSize:'12px',fontWeight:'700',border:'1px solid '+(enabled?color:'#E2E8F0'),cursor:enabled?'pointer':'not-allowed',background:enabled?color:'#F8FAFC',color:enabled?'white':'#CBD5E1',whiteSpace:'nowrap'};}
 
 // ── Audit Summary Tab ─────────────────────────────────────────────────────────
 function AuditSummaryTab({txns,enrichments,auditTags}){
@@ -1635,7 +1788,7 @@ function FiscalHealthTab({txns,amendments,setAmendments,initialView,onViewChange
 }
 
 // ── Data & Audit Tab (Ledger + Enrichment + Summary) ──────────────────────────
-function DataAuditTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,jumpToId,clearJump,initialView,onViewChange,onJumpToEnrich}){
+function DataAuditTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,jumpToId,clearJump,initialView,onViewChange,onJumpToEnrich,userRole}){
   const [view,setView]=useState(initialView||'ledger');
   function setViewAndNotify(v){setView(v);if(onViewChange)onViewChange(v);}
   useEffect(()=>{if(initialView&&initialView!==view)setView(initialView);},[initialView]);
@@ -1648,7 +1801,7 @@ function DataAuditTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,ju
         {tabBtn('audit','Audit Summary')}
       </div>
       {view==='ledger'&&<LedgerTab txns={txns} enrichments={enrichments} auditTags={auditTags} onJumpToEnrich={onJumpToEnrich}/>}
-      {view==='enrichment'&&<EnrichmentTab txns={txns} enrichments={enrichments} setEnrichments={setEnrichments} auditTags={auditTags} setAuditTags={setAuditTags} jumpToId={jumpToId} clearJump={clearJump}/>}
+      {view==='enrichment'&&<EnrichmentTab txns={txns} enrichments={enrichments} setEnrichments={setEnrichments} auditTags={auditTags} setAuditTags={setAuditTags} jumpToId={jumpToId} clearJump={clearJump} userRole={userRole}/>}
       {view==='audit'&&<AuditSummaryTab txns={txns} enrichments={enrichments} auditTags={auditTags}/>}
     </div>
   );
@@ -1669,25 +1822,32 @@ const STATUS_ORDER=['unpaid','paid'];
 function normPayStatus(s){return s==='paid'?'paid':'unpaid';}
 const PAY_TYPES=['Stipend','Travel','Services','Materials','Other'];
 const RECIP_TYPES=['LEA','COE','Individual','Vendor','Other'];
-const EMPTY_PAY={recipient:'',organization:'',contactName:'',recipientType:'Individual',paymentType:'Services',description:'',amount:'',fundingSource:'primary',fyYear:'',agreementRef:'',mouId:'',expectedDate:'',txnId:'',paidDate:'',paidAmount:''};
+const EMPTY_PAY={recipient:'',organization:'',contactName:'',recipientType:'Individual',paymentType:'Services',description:'',amount:'',fundingSource:'primary',fyYear:'',event:'',agreementRef:'',mouId:'',expectedDate:'',txnId:'',paidDate:'',paidAmount:''};
 
 // ── Payment Form (standalone component — MUST be outside PartnerPaymentsTab) ──
 // Extracting this fixes a React bug where inline component definitions inside a
 // parent that re-renders on every keystroke get remounted, losing input focus.
-function PayForm({form,setForm,onSave,onCancel,saveLabel,txns,mous}){
+function PayForm({form,setForm,onSave,onCancel,saveLabel,txns,mous,events,onAddEvent}){
   const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'7px 10px',fontSize:'13px',width:'100%'};
   // 0110238 transactions for the selected fiscal year, newest first. If the
   // form already references a txn outside the current FY filter, keep it in
   // the list so the select can still display it.
   const txn238=useMemo(()=>{
-    const list=(txns||[]).filter(t=>t.account==='0110238'&&t.fy===form.fyYear)
+    // Loosened 2026-07: before FY24/25 some COE reimbursements were paid out of
+    // the primary allocation (0110029) rather than the dedicated 0110238. So the
+    // ledger-match dropdown follows the funding source: Primary Allocation shows
+    // 0110029 transactions, COE Reimbursement shows 0110238. (Indirect 0110030
+    // is intentionally excluded from matching.)
+    const matchAccount=form.fundingSource==='coe'?'0110238':'0110029';
+    const list=(txns||[]).filter(t=>t.account===matchAccount&&t.fy===form.fyYear)
       .sort((a,b)=>(b.date||'').localeCompare(a.date||''));
     if(form.txnId&&!list.find(t=>t.id===form.txnId)){
       const cur=(txns||[]).find(t=>t.id===form.txnId);
       if(cur) list.unshift(cur);
     }
     return list;
-  },[txns,form.fyYear,form.txnId]);
+  },[txns,form.fyYear,form.txnId,form.fundingSource]);
+  const matchAccountLabel=form.fundingSource==='coe'?'0110238':'0110029';
   function selectTxn(id){
     if(!id){setForm(p=>({...p,txnId:''}));return;}
     const t=(txns||[]).find(x=>x.id===id);
@@ -1735,6 +1895,31 @@ function PayForm({form,setForm,onSave,onCancel,saveLabel,txns,mous}){
         <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Fiscal Year</label><select value={form.fyYear} onChange={e=>setForm(p=>({...p,fyYear:e.target.value}))} style={inp}>{FY_LIST.map(f=><option key={f} value={f}>{f}</option>)}</select></div>
         <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Agreement Ref #</label><input value={form.agreementRef} onChange={e=>setForm(p=>({...p,agreementRef:e.target.value}))} placeholder="MOU #, PO #, etc." style={inp}/></div>
       </div>
+      {/* Event / Activity — group payments by the activity they belong to.
+          Pick an existing event or type a new one inline (adds to the shared list). */}
+      {(()=>{
+        const [addingEvent,setAddingEvent]=[form._addingEvent,(v)=>setForm(p=>({...p,_addingEvent:v}))];
+        return(
+          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Event / Activity</label>
+            {addingEvent?(
+              <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+                <input autoFocus value={form.event} onChange={e=>setForm(p=>({...p,event:e.target.value}))} placeholder="Type a new event name..." style={{...inp,flex:1}}/>
+                <button type="button" onClick={()=>{const name=(form.event||'').trim();if(name&&onAddEvent)onAddEvent(name);setForm(p=>({...p,_addingEvent:false}));}} style={{background:'#059669',color:'white',border:'none',borderRadius:'7px',padding:'7px 12px',fontSize:'12px',fontWeight:'600',cursor:'pointer',whiteSpace:'nowrap'}}>Add</button>
+                <button type="button" onClick={()=>setForm(p=>({...p,_addingEvent:false}))} style={{border:'1px solid #E2E8F0',background:'white',borderRadius:'7px',padding:'7px 12px',fontSize:'12px',cursor:'pointer',color:'#64748B'}}>Cancel</button>
+              </div>
+            ):(
+              <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+                <select value={form.event||''} onChange={e=>setForm(p=>({...p,event:e.target.value}))} style={{...inp,flex:1}}>
+                  <option value="">— No event (Unassigned) —</option>
+                  {(events||[]).map(ev=><option key={ev} value={ev}>{ev}</option>)}
+                  {form.event&&!(events||[]).includes(form.event)&&<option value={form.event}>{form.event}</option>}
+                </select>
+                <button type="button" onClick={()=>setForm(p=>({...p,_addingEvent:true,event:''}))} style={{border:'1px solid #BFDBFE',background:'#EFF6FF',color:'#1D4ED8',borderRadius:'7px',padding:'7px 12px',fontSize:'12px',fontWeight:'600',cursor:'pointer',whiteSpace:'nowrap'}}>+ New event</button>
+              </div>
+            )}
+          </div>
+        );
+      })()}
       {/* MOU cross-link: pick a recorded MOU; Agreement Ref stays free text for non-MOU payments */}
       <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Linked MOU (optional)</label>
         <select value={form.mouId||''} onChange={e=>setForm(p=>({...p,mouId:e.target.value}))} style={inp}>
@@ -1744,12 +1929,12 @@ function PayForm({form,setForm,onSave,onCancel,saveLabel,txns,mous}){
       </div>
       {/* Ledger match: pick the actual 0110238 transaction; date + amount autofill */}
       <div style={{background:'#ECFDF5',border:'1px solid #A7F3D0',borderRadius:'10px',padding:'12px'}}>
-        <label style={{display:'block',fontSize:'11px',color:'#047857',fontWeight:'700',marginBottom:'4px'}}>Match Ledger Transaction — 0110238, {form.fyYear||'select FY'}</label>
+        <label style={{display:'block',fontSize:'11px',color:'#047857',fontWeight:'700',marginBottom:'4px'}}>Match Ledger Transaction — {matchAccountLabel}, {form.fyYear||'select FY'}</label>
         <select value={form.txnId} onChange={e=>selectTxn(e.target.value)} style={{...inp,borderColor:'#A7F3D0',marginBottom:'8px'}}>
           <option value="">— No ledger match yet —</option>
           {txn238.map(t=><option key={t.id} value={t.id}>{t.date} · {fmt(t.amt)} · {(t.desc||'').slice(0,48)}</option>)}
         </select>
-        {txn238.length===0&&<div style={{fontSize:'11px',color:'#047857',marginBottom:'8px'}}>No 0110238 transactions found for {form.fyYear||'the selected year'}. Import newer ledger data or change the fiscal year above.</div>}
+        {txn238.length===0&&<div style={{fontSize:'11px',color:'#047857',marginBottom:'8px'}}>No {matchAccountLabel} transactions found for {form.fyYear||'the selected year'}. Import newer ledger data or change the fiscal year above.</div>}
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'10px'}}>
           <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Expected Pay Date</label><input type="date" value={form.expectedDate} onChange={e=>setForm(p=>({...p,expectedDate:e.target.value}))} style={inp}/></div>
           <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Actual Pay Date <span style={{color:'#047857'}}>(auto on match)</span></label><input type="date" value={form.paidDate} onChange={e=>setForm(p=>({...p,paidDate:e.target.value}))} style={inp}/></div>
@@ -1777,7 +1962,12 @@ function PartnerPaymentsTab({payments,userRole,txns,mous}){
   const [filterStatus,setFilterStatus]=useState('');
   const [filterType,setFilterType]=useState('');
   const [filterFY,setFilterFY]=useState('');
+  const [filterEvent,setFilterEvent]=useState('');
   const [search,setSearch]=useState('');
+  const [collapsedGroups,setCollapsedGroups]=useState(()=>new Set());
+  // Events typed via "+ New event" that have no payment yet — kept so they
+  // appear in the dropdown until a payment is assigned to them.
+  const [pendingEvents,setPendingEvents]=useState([]);
   const [expandedId,setExpandedId]=useState(null);
   const [showAdd,setShowAdd]=useState(false);
   const [editId,setEditId]=useState(null);
@@ -1786,6 +1976,15 @@ function PartnerPaymentsTab({payments,userRole,txns,mous}){
   const [form,setForm]=useState({...EMPTY_PAY,fyYear:activeGrantFY()});
   const [formError,setFormError]=useState('');
 
+  // All known event names, sorted, for dropdowns and the filter
+  const eventList=useMemo(()=>{
+    const s=new Set();
+    payments.forEach(p=>{if(p.event&&p.event.trim())s.add(p.event.trim());});
+    pendingEvents.forEach(e=>{if(e&&e.trim())s.add(e.trim());});
+    return[...s].sort((a,b)=>a.localeCompare(b));
+  },[payments,pendingEvents]);
+  function addEventName(name){setPendingEvents(prev=>prev.includes(name)?prev:[...prev,name]);}
+
   const filtered=useMemo(()=>{
     let r=payments;
     if(search){const q=search.toLowerCase();r=r.filter(p=>(p.recipient||'').toLowerCase().includes(q)||(p.contactName||'').toLowerCase().includes(q)||(p.description||'').toLowerCase().includes(q));}
@@ -1793,8 +1992,24 @@ function PartnerPaymentsTab({payments,userRole,txns,mous}){
     if(filterStatus) r=r.filter(p=>normPayStatus(p.status)===filterStatus);
     if(filterType) r=r.filter(p=>p.paymentType===filterType);
     if(filterFY) r=r.filter(p=>p.fyYear===filterFY);
+    if(filterEvent){
+      if(filterEvent==='__unassigned__') r=r.filter(p=>!(p.event||'').trim());
+      else r=r.filter(p=>(p.event||'').trim()===filterEvent);
+    }
     return[...r].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
-  },[payments,search,filterSource,filterStatus,filterType,filterFY]);
+  },[payments,search,filterSource,filterStatus,filterType,filterFY,filterEvent]);
+
+  // Group the filtered payments by event. Named events first (alphabetical),
+  // then a single "Unassigned" group at the bottom for payments with no event.
+  const grouped=useMemo(()=>{
+    const byEvent={};
+    filtered.forEach(p=>{const key=(p.event||'').trim()||'__unassigned__';(byEvent[key]=byEvent[key]||[]).push(p);});
+    const namedKeys=Object.keys(byEvent).filter(k=>k!=='__unassigned__').sort((a,b)=>a.localeCompare(b));
+    const groups=namedKeys.map(k=>({key:k,label:k,items:byEvent[k]}));
+    if(byEvent['__unassigned__']) groups.push({key:'__unassigned__',label:'Unassigned / No Event',items:byEvent['__unassigned__']});
+    return groups;
+  },[filtered]);
+  function toggleGroup(key){setCollapsedGroups(s=>{const n=new Set(s);n.has(key)?n.delete(key):n.add(key);return n;});}
 
   const totalAmt=payments.reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
   const outstanding=payments.filter(p=>normPayStatus(p.status)!=='paid');
@@ -1812,7 +2027,8 @@ function PartnerPaymentsTab({payments,userRole,txns,mous}){
     // A ledger match at creation time means the payment already went out
     const initialStatus=form.txnId?'paid':'unpaid';
     try{
-      await FS.payment(id,{...form,recipient:displayRecipient,id,amount:parseFloat(form.amount)||0,paidAmount:parseFloat(form.paidAmount)||0,status:initialStatus,
+      const {_addingEvent,...formClean}=form;
+      await FS.payment(id,{...formClean,event:(form.event||'').trim(),recipient:displayRecipient,id,amount:parseFloat(form.amount)||0,paidAmount:parseFloat(form.paidAmount)||0,status:initialStatus,
         coeReimbursement:form.fundingSource==='coe'&&initialStatus==='paid'?'not_invoiced':null,
         statusHistory:[{status:initialStatus,note:initialStatus==='paid'?'Created with ledger match '+form.txnId:'Payment record created',updatedBy:u.displayName||u.email,updatedAt:now}],
         notes:[],createdAt:now,createdBy:u.displayName||u.email,createdByEmail:u.email});
@@ -1830,7 +2046,7 @@ function PartnerPaymentsTab({payments,userRole,txns,mous}){
     try{
       const before=payments.find(x=>x.id===editId);
       if(before) await saveEventHistory('updated',{...before,eventName:before.recipient});
-      const upd={recipient:displayRecipient,organization:form.organization||'',contactName:form.contactName||'',recipientType:form.recipientType,paymentType:form.paymentType,description:form.description,amount:parseFloat(form.amount)||0,fundingSource:form.fundingSource,fyYear:form.fyYear,agreementRef:form.agreementRef,mouId:form.mouId||'',expectedDate:form.expectedDate,txnId:form.txnId||'',paidDate:form.paidDate||'',paidAmount:parseFloat(form.paidAmount)||0};
+      const upd={recipient:displayRecipient,organization:form.organization||'',contactName:form.contactName||'',recipientType:form.recipientType,paymentType:form.paymentType,description:form.description,amount:parseFloat(form.amount)||0,fundingSource:form.fundingSource,fyYear:form.fyYear,event:(form.event||'').trim(),agreementRef:form.agreementRef,mouId:form.mouId||'',expectedDate:form.expectedDate,txnId:form.txnId||'',paidDate:form.paidDate||'',paidAmount:parseFloat(form.paidAmount)||0};
       // Matching a ledger transaction implies the payment was made
       if(form.txnId&&before&&normPayStatus(before.status)!=='paid'){
         upd.status='paid';
@@ -1880,7 +2096,7 @@ async function handleCoeReimbUpdate(p,newStatus){
     logActivity('payment_note',`Added note to "${p.recipient}"`,{id:p.id});
     setNoteText('');setNoteInputId(null);
   }
-  function startEdit(p){const wasOrg=p.recipientType==='LEA'||p.recipientType==='COE';setEditId(p.id);setForm({recipient:wasOrg?'':(p.recipient||''),organization:p.organization||(wasOrg?(p.recipient||''):''),contactName:p.contactName||'',recipientType:p.recipientType||'Individual',paymentType:p.paymentType||'Services',description:p.description||'',amount:String(p.amount||''),fundingSource:p.fundingSource||'primary',fyYear:p.fyYear||activeGrantFY(),agreementRef:p.agreementRef||'',mouId:p.mouId||'',expectedDate:p.expectedDate||'',txnId:p.txnId||'',paidDate:p.paidDate||'',paidAmount:String(p.paidAmount||'')});}
+  function startEdit(p){const wasOrg=p.recipientType==='LEA'||p.recipientType==='COE';setEditId(p.id);setForm({recipient:wasOrg?'':(p.recipient||''),organization:p.organization||(wasOrg?(p.recipient||''):''),contactName:p.contactName||'',recipientType:p.recipientType||'Individual',paymentType:p.paymentType||'Services',description:p.description||'',amount:String(p.amount||''),fundingSource:p.fundingSource||'primary',fyYear:p.fyYear||activeGrantFY(),event:p.event||'',agreementRef:p.agreementRef||'',mouId:p.mouId||'',expectedDate:p.expectedDate||'',txnId:p.txnId||'',paidDate:p.paidDate||'',paidAmount:String(p.paidAmount||'')});}
 
   const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'7px 10px',fontSize:'13px',width:'100%'};
   const srcLabel={primary:'Primary Allocation',coe:'COE Reimbursement'};
@@ -1918,6 +2134,7 @@ async function handleCoeReimbUpdate(p,newStatus){
         <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} style={{...inp,flex:1,minWidth:'110px'}}><option value="">Paid & Unpaid</option>{STATUS_ORDER.map(s=><option key={s} value={s}>{PAY_STATUSES[s].label}</option>)}</select>
         <select value={filterType} onChange={e=>setFilterType(e.target.value)} style={{...inp,flex:1,minWidth:'110px'}}><option value="">All Types</option>{PAY_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select>
         <select value={filterFY} onChange={e=>setFilterFY(e.target.value)} style={{...inp,flex:1,minWidth:'100px'}}><option value="">All Years</option>{FY_LIST.map(f=><option key={f} value={f}>{f}</option>)}</select>
+        <select value={filterEvent} onChange={e=>setFilterEvent(e.target.value)} style={{...inp,flex:1,minWidth:'150px'}}><option value="">All Events</option>{eventList.map(ev=><option key={ev} value={ev}>{ev}</option>)}<option value="__unassigned__">Unassigned / No Event</option></select>
         {canManage&&<button onClick={()=>{setShowAdd(true);setEditId(null);setFormError('');setForm({...EMPTY_PAY,fyYear:activeGrantFY()});}} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontWeight:'600',cursor:'pointer',whiteSpace:'nowrap'}}>+ Add Payment</button>}
       </div>
 
@@ -1926,16 +2143,16 @@ async function handleCoeReimbUpdate(p,newStatus){
         <div style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
           <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>New Payment Record</div>
           {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
-          <PayForm form={form} setForm={setForm} onSave={handleAdd} onCancel={()=>setShowAdd(false)} saveLabel="Create Payment" txns={txns} mous={mous}/>
+          <PayForm form={form} setForm={setForm} onSave={handleAdd} onCancel={()=>setShowAdd(false)} saveLabel="Create Payment" txns={txns} mous={mous} events={eventList} onAddEvent={addEventName}/>
         </div>
       )}
 
       {/* Empty state */}
       {filtered.length===0&&<div style={{background:'white',border:'2px dashed #E2E8F0',borderRadius:'12px',padding:'40px',textAlign:'center'}}><div style={{fontSize:'32px',marginBottom:'8px'}}>💳</div><p style={{color:'#64748B',fontWeight:'500',margin:0}}>{payments.length===0?'No payments tracked yet.':'No payments match your filters.'}</p>{canManage&&payments.length===0&&<p style={{color:'#94A3B8',fontSize:'13px',margin:'6px 0 0'}}>Click "+ Add Payment" to start tracking outgoing payments.</p>}</div>}
 
-      {/* Payment cards */}
-      <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
-        {filtered.map(p=>{
+      {/* Payment cards — grouped by event, Unassigned last */}
+      {(()=>{
+        const renderCard=(p)=>{
           const status=normPayStatus(p.status);
           const ps=PAY_STATUSES[status];
           const sc=srcColor[p.fundingSource]||srcColor.primary;
@@ -1949,7 +2166,7 @@ async function handleCoeReimbUpdate(p,newStatus){
             <div key={p.id} style={{background:'#EFF6FF',border:'2px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
               <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>Editing: {p.recipient}</div>
               {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
-              <PayForm form={form} setForm={setForm} onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes" txns={txns} mous={mous}/>
+              <PayForm form={form} setForm={setForm} onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes" txns={txns} mous={mous} events={eventList} onAddEvent={addEventName}/>
             </div>
           );
 
@@ -2068,11 +2285,38 @@ async function handleCoeReimbUpdate(p,newStatus){
               )}
             </div>
           );
-        })}
-      </div>
+        };
+        return(
+          <div style={{display:'flex',flexDirection:'column',gap:'18px'}}>
+            {grouped.map(g=>{
+              const collapsed=collapsedGroups.has(g.key);
+              const groupTotal=g.items.reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
+              const groupUnpaid=g.items.filter(p=>normPayStatus(p.status)!=='paid').length;
+              const groupPaid=g.items.length-groupUnpaid;
+              const isUnassigned=g.key==='__unassigned__';
+              return(
+                <div key={g.key}>
+                  {/* Group header */}
+                  <div onClick={()=>toggleGroup(g.key)} style={{display:'flex',alignItems:'center',gap:'10px',cursor:'pointer',padding:'8px 10px',background:isUnassigned?'#F8FAFC':'#F0FDFA',border:'1px solid '+(isUnassigned?'#E2E8F0':'#99F6E4'),borderRadius:'10px',marginBottom:collapsed?0:'10px'}}>
+                    <span style={{fontSize:'12px',color:'#94A3B8',transform:collapsed?'rotate(-90deg)':'none',transition:'transform .15s'}}>▼</span>
+                    <span style={{fontSize:'14px',fontWeight:'700',color:isUnassigned?'#64748B':'#0F766E'}}>{g.label}</span>
+                    <span style={{background:isUnassigned?'#E2E8F0':'#CCFBF1',color:isUnassigned?'#475569':'#0F766E',fontSize:'12px',fontWeight:'700',padding:'2px 9px',borderRadius:'20px'}}>{g.items.length}</span>
+                    <div style={{display:'flex',gap:'6px'}}>
+                      {groupUnpaid>0&&<span style={{background:'#FEE2E2',color:'#B91C1C',fontSize:'11px',fontWeight:'700',padding:'2px 8px',borderRadius:'20px'}}>{groupUnpaid} unpaid</span>}
+                      {groupPaid>0&&<span style={{background:'#D1FAE5',color:'#059669',fontSize:'11px',fontWeight:'700',padding:'2px 8px',borderRadius:'20px'}}>{groupPaid} paid</span>}
+                    </div>
+                    <span style={{marginLeft:'auto',fontSize:'13px',fontWeight:'700',color:'#1E293B'}}>{fmt(groupTotal)}</span>
+                  </div>
+                  {/* Group cards */}
+                  {!collapsed&&<div style={{display:'flex',flexDirection:'column',gap:'10px'}}>{g.items.map(renderCard)}</div>}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
     </div>
   );
-
 }
 
 
@@ -2474,6 +2718,7 @@ function App(){
   const [auditTags,setAuditTags]=useState({});
   const [todos,setTodos]=useState([]);
   const [amendments,setAmendments]=useState([]);
+  const [accountGuide,setAccountGuide]=useState(DEFAULT_ACCOUNT_GUIDE);
   const [payments,setPayments]=useState([]);
   const [mous,setMous]=useState([]);
 
@@ -2507,13 +2752,26 @@ function App(){
       _db.collection('transactions').onSnapshot(s=>{setTransactions(s.docs.map(d=>d.data()));setTxnLoading(false);done();},e=>{console.error('Txn:',e);setTxnLoading(false);done();}),
       _col('todos').onSnapshot(s=>{if(!s.exists){FS.todos(INITIAL_TODOS);setTodos(INITIAL_TODOS);}else setTodos(s.data().items||[]);done();}),
       _col('amendments').onSnapshot(s=>{setAmendments(s.exists?s.data().items||[]:[]);done();}),
-      _col('auditTags').onSnapshot(s=>{setAuditTags(s.exists?s.data().data||{}:{});done();}),
+      _col('auditTags').onSnapshot(s=>{
+        const raw=s.exists?s.data().data||{}:{};
+        // One-time cleanup: remove any retired tags still stored on transactions.
+        let changed=false;const clean={};
+        Object.entries(raw).forEach(([id,tags])=>{
+          const kept=(tags||[]).filter(t=>!RETIRED_TAG_IDS.includes(t));
+          if(kept.length!==(tags||[]).length) changed=true;
+          if(kept.length) clean[id]=kept;
+        });
+        setAuditTags(clean);
+        if(changed) FS.tags(clean); // persist cleaned map back once
+        done();
+      }),
       _col('enrichments').onSnapshot(s=>{setEnrichments(s.exists?s.data().data||{}:{});done();}),
     ];
     // Payments subscription (independent, doesn't block main load)
     const paymentsSub=_db.collection('payments').onSnapshot(s=>{setPayments(s.docs.map(d=>({...d.data(),id:d.id})));},e=>console.error('Payments:',e));
     const mousSub=_db.collection('mous').onSnapshot(s=>{setMous(s.docs.map(d=>({...d.data(),id:d.id})));},e=>console.error('MOUs:',e));
-    return()=>{subs.forEach(u=>u());paymentsSub();mousSub();};
+    const guideSub=_col('accountGuide').onSnapshot(s=>{setAccountGuide(s.exists&&s.data().items?s.data().items:DEFAULT_ACCOUNT_GUIDE);},e=>console.error('Guide:',e));
+    return()=>{subs.forEach(u=>u());paymentsSub();mousSub();guideSub();};
   },[user,roleLoading]);
 
   useEffect(()=>{
@@ -2533,6 +2791,7 @@ function App(){
 
   function updTodos(fn){setTodos(p=>{const n=typeof fn==='function'?fn(p):fn;setTimeout(()=>FS.todos(n),0);return n;});}
   function updAmendments(fn){setAmendments(p=>{const n=typeof fn==='function'?fn(p):fn;setTimeout(()=>FS.amendments(n),0);return n;});}
+  function updAccountGuide(items){setAccountGuide(items);FS.accountGuide(items);}
   function updTags(fn){setAuditTags(p=>{const n=typeof fn==='function'?fn(p):fn;setTimeout(()=>FS.tags(n),0);return n;});}
   function updEnrichments(fn){setEnrichments(p=>{const n=typeof fn==='function'?fn(p):fn;if(enrTimer.current)clearTimeout(enrTimer.current);enrTimer.current=setTimeout(()=>FS.enr(n),1500);return n;});}
   async function handleImport(rows,mode){
@@ -2631,11 +2890,11 @@ function App(){
           </div>
         </div>
         <div style={{flex:1,overflowY:'auto',padding:'24px'}}>
-          {activeTab==='overview'  &&<OverviewTab    txns={transactions} todos={todos} setTodos={updTodos} auditTags={auditTags} userRole={userRole} payments={payments} teamMembers={teamMembers} currentUid={user.uid} onJumpToAllocation={jumpToAllocation}/>}
+          {activeTab==='overview'  &&<OverviewTab    txns={transactions} todos={todos} setTodos={updTodos} auditTags={auditTags} userRole={userRole} payments={payments} teamMembers={teamMembers} currentUid={user.uid} onJumpToAllocation={jumpToAllocation} accountGuide={accountGuide} setAccountGuide={updAccountGuide}/>}
           {activeTab==='fiscal'    &&<FiscalHealthTab txns={transactions} amendments={amendments} setAmendments={updAmendments} initialView={fiscalView} onViewChange={setFiscalView}/>}
           {activeTab==='payments'  &&<PartnerPaymentsTab payments={payments} userRole={userRole} txns={transactions} mous={mous}/>}
           {activeTab==='mous'      &&<MousTab mous={mous} payments={payments} userRole={userRole}/>}
-          {activeTab==='dataaudit' &&<DataAuditTab   txns={transactions} enrichments={enrichments} setEnrichments={updEnrichments} auditTags={auditTags} setAuditTags={updTags} jumpToId={jumpToId} clearJump={()=>setJumpToId(null)} initialView={dataAuditView} onViewChange={setDataAuditView} onJumpToEnrich={jumpToEnrich}/>}
+          {activeTab==='dataaudit' &&<DataAuditTab   txns={transactions} enrichments={enrichments} setEnrichments={updEnrichments} auditTags={auditTags} setAuditTags={updTags} jumpToId={jumpToId} clearJump={()=>setJumpToId(null)} initialView={dataAuditView} onViewChange={setDataAuditView} onJumpToEnrich={jumpToEnrich} userRole={userRole}/>}
           {activeTab==='log'       &&<LogTab logs={activityLogs}/>}
         </div>
       </div>
