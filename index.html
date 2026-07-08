@@ -2401,13 +2401,38 @@ async function handleCoeReimbUpdate(p,newStatus){
 // Defined inline inside EventsTab, this remounted on every keystroke (parent
 // re-renders on each setForm), stealing focus from the name/date inputs. Same
 // fix as PayForm: hoist it out and pass form/setForm as props.
-function EventForm({form,setForm,onSave,onCancel,saveLabel}){
+// Starting event types offered in the Type dropdown even before any event uses
+// them. The field is free-form: users can add new types inline, which then join
+// the dropdown for reuse (see EventsTab typeList).
+const EVENT_TYPE_SEEDS=["Math CoP","Science CoP","Computer Science CoP"];
+
+function EventForm({form,setForm,onSave,onCancel,saveLabel,typeList,onAddType}){
   const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'7px 10px',fontSize:'13px',width:'100%'};
+  const addingType=form._addingType;
   return(
     <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
       <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:'10px'}}>
         <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Event Name *</label><input value={form.name} onChange={ev=>setForm(p=>({...p,name:ev.target.value}))} placeholder="e.g. Math CoP Spring 2026" style={inp}/></div>
         <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Date</label><input type="date" value={form.date} onChange={ev=>setForm(p=>({...p,date:ev.target.value}))} style={inp}/></div>
+      </div>
+      {/* Type — free-form: choose an existing type or add a new one inline */}
+      <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Type</label>
+        {addingType?(
+          <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+            <input autoFocus value={form.type||''} onChange={ev=>setForm(p=>({...p,type:ev.target.value}))} placeholder="Type a new type..." style={{...inp,flex:1}}/>
+            <button type="button" onClick={()=>{const t=(form.type||'').trim();if(t&&onAddType)onAddType(t);setForm(p=>({...p,_addingType:false}));}} style={{background:'#059669',color:'white',border:'none',borderRadius:'7px',padding:'7px 12px',fontSize:'12px',fontWeight:'600',cursor:'pointer',whiteSpace:'nowrap'}}>Add</button>
+            <button type="button" onClick={()=>setForm(p=>({...p,_addingType:false}))} style={{border:'1px solid #E2E8F0',background:'white',borderRadius:'7px',padding:'7px 12px',fontSize:'12px',cursor:'pointer',color:'#64748B'}}>Cancel</button>
+          </div>
+        ):(
+          <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+            <select value={form.type||''} onChange={ev=>setForm(p=>({...p,type:ev.target.value}))} style={{...inp,flex:1}}>
+              <option value="">— No type (Uncategorized) —</option>
+              {(typeList||[]).map(t=><option key={t} value={t}>{t}</option>)}
+              {form.type&&!(typeList||[]).includes(form.type)&&<option value={form.type}>{form.type}</option>}
+            </select>
+            <button type="button" onClick={()=>setForm(p=>({...p,_addingType:true,type:''}))} style={{border:'1px solid #BFDBFE',background:'#EFF6FF',color:'#1D4ED8',borderRadius:'7px',padding:'7px 12px',fontSize:'12px',fontWeight:'600',cursor:'pointer',whiteSpace:'nowrap'}}>+ New type</button>
+          </div>
+        )}
       </div>
       <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Description</label><textarea value={form.description} onChange={ev=>setForm(p=>({...p,description:ev.target.value}))} placeholder="What is this event or activity?" rows={2} style={{...inp,resize:'vertical'}}/></div>
       <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
@@ -2424,8 +2449,10 @@ function EventsTab({events,payments,userRole}){
   const [sortBy,setSortBy]=useState('name'); // 'name'|'date'
   const [showAdd,setShowAdd]=useState(false);
   const [editId,setEditId]=useState(null);
-  const [form,setForm]=useState({name:'',description:'',date:''});
+  const [form,setForm]=useState({name:'',description:'',date:'',type:''});
   const [formError,setFormError]=useState('');
+  const [pendingTypes,setPendingTypes]=useState([]); // new types added inline, kept until an event uses them
+  const [collapsedTypes,setCollapsedTypes]=useState(()=>new Set()); // track which Type groups the user opened; default collapsed
 
   // Count payments per event name (link-by-name) for the "used by" indicator
   const countByName=useMemo(()=>{
@@ -2440,14 +2467,36 @@ function EventsTab({events,payments,userRole}){
     return Object.keys(countByName).filter(n=>!known.has(n)).sort((a,b)=>a.localeCompare(b));
   },[events,countByName]);
 
+  // Type dropdown options: seeds + any type already used on an event + pending
+  const typeList=useMemo(()=>{
+    const s=new Set(EVENT_TYPE_SEEDS);
+    (events||[]).forEach(e=>{if(e.type&&e.type.trim())s.add(e.type.trim());});
+    pendingTypes.forEach(t=>{if(t&&t.trim())s.add(t.trim());});
+    return[...s].sort((a,b)=>a.localeCompare(b));
+  },[events,pendingTypes]);
+  function addType(t){setPendingTypes(prev=>prev.includes(t)?prev:[...prev,t]);}
+
+  const byName=(a,b)=>(a.name||'').localeCompare(b.name||'');
+  const byDate=(a,b)=>{const da=a.date||'',db=b.date||'';if(!da&&!db)return byName(a,b);if(!da)return 1;if(!db)return -1;return db.localeCompare(da)||byName(a,b);};
   const filtered=useMemo(()=>{
     let r=events;
-    if(search){const q=search.toLowerCase();r=r.filter(e=>(e.name||'').toLowerCase().includes(q)||(e.description||'').toLowerCase().includes(q));}
-    const byName=(a,b)=>(a.name||'').localeCompare(b.name||'');
-    // Date sort: newest first; events without a date sort to the bottom, then by name.
-    const byDate=(a,b)=>{const da=a.date||'',db=b.date||'';if(!da&&!db)return byName(a,b);if(!da)return 1;if(!db)return -1;return db.localeCompare(da)||byName(a,b);};
-    return[...r].sort(sortBy==='date'?byDate:byName);
-  },[events,search,sortBy]);
+    if(search){const q=search.toLowerCase();r=r.filter(e=>(e.name||'').toLowerCase().includes(q)||(e.description||'').toLowerCase().includes(q)||(e.type||'').toLowerCase().includes(q));}
+    return r;
+  },[events,search]);
+
+  // Group by Type; within each group, sort by the chosen key. Named types are
+  // alphabetical; an "Uncategorized / No Type" group sits last (mirrors the
+  // Partner Payments "Unassigned" group).
+  const grouped=useMemo(()=>{
+    const cmp=sortBy==='date'?byDate:byName;
+    const byType={};
+    filtered.forEach(e=>{const key=(e.type||'').trim()||'__untyped__';(byType[key]=byType[key]||[]).push(e);});
+    Object.keys(byType).forEach(k=>byType[k].sort(cmp));
+    const namedKeys=Object.keys(byType).filter(k=>k!=='__untyped__').sort((a,b)=>a.localeCompare(b));
+    const groups=namedKeys.map(k=>({key:k,label:k,items:byType[k]}));
+    if(byType['__untyped__']) groups.push({key:'__untyped__',label:'Uncategorized / No Type',items:byType['__untyped__']});
+    return groups;
+  },[filtered,sortBy]);
 
   async function handleAdd(){
     setFormError('');
@@ -2457,9 +2506,9 @@ function EventsTab({events,payments,userRole}){
     const u=_auth.currentUser;if(!u){setFormError('You are not signed in.');return;}
     const id='e'+Date.now();const now=new Date().toISOString().slice(0,10);
     try{
-      await FS.event(id,{id,name,description:form.description.trim(),date:form.date,createdAt:now,createdBy:u.displayName||u.email,createdByEmail:u.email});
-      logActivity('event_created',`Created event: "${name}"`,{date:form.date});
-      setShowAdd(false);setForm({name:'',description:'',date:''});
+      await FS.event(id,{id,name,description:form.description.trim(),date:form.date,type:(form.type||'').trim(),createdAt:now,createdBy:u.displayName||u.email,createdByEmail:u.email});
+      logActivity('event_created',`Created event: "${name}"`,{date:form.date,type:(form.type||'').trim()});
+      setShowAdd(false);setForm({name:'',description:'',date:'',type:''});
     }catch(err){
       setFormError('Could not save event: '+(err&&err.message?err.message:'unknown error')+'. This is usually a permissions issue — confirm your role in Manage Team.');
     }
@@ -2479,7 +2528,7 @@ function EventsTab({events,payments,userRole}){
       if(!window.confirm(`Renaming "${oldName}" to "${name}" will update the event on ${affected.length} payment${affected.length!==1?'s':''}. Continue?`)) return;
     }
     try{
-      await FS.eventUpdate(editId,{name,description:form.description.trim(),date:form.date});
+      await FS.eventUpdate(editId,{name,description:form.description.trim(),date:form.date,type:(form.type||'').trim()});
       // Propagate rename to all payments referencing the old name (link-by-name)
       if(affected.length>0){
         for(const p of affected){ await FS.paymentUpdate(p.id,{event:name}); }
@@ -2504,8 +2553,10 @@ function EventsTab({events,payments,userRole}){
   }
 
   // Formalize a legacy free-text event name into a real record
-  function formalize(name){setShowAdd(true);setEditId(null);setFormError('');setForm({name,description:'',date:''});}
-  function startEdit(e){setEditId(e.id);setShowAdd(false);setFormError('');setForm({name:e.name||'',description:e.description||'',date:e.date||''});}
+  function formalize(name){setShowAdd(true);setEditId(null);setFormError('');setForm({name,description:'',date:'',type:''});}
+  function startEdit(e){setEditId(e.id);setShowAdd(false);setFormError('');setForm({name:e.name||'',description:e.description||'',date:e.date||'',type:e.type||''});}
+  function isTypeCollapsed(key){return !collapsedTypes.has(key);}
+  function toggleType(key){setCollapsedTypes(s=>{const n=new Set(s);n.has(key)?n.delete(key):n.add(key);return n;});}
 
   const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'7px 10px',fontSize:'13px',width:'100%'};
 
@@ -2520,14 +2571,14 @@ function EventsTab({events,payments,userRole}){
       <div style={{display:'flex',gap:'8px',flexWrap:'wrap',alignItems:'center'}}>
         <input placeholder="Search events..." value={search} onChange={e=>setSearch(e.target.value)} style={{...inp,flex:'2',minWidth:'200px'}}/>
         <select value={sortBy} onChange={e=>setSortBy(e.target.value)} style={{...inp,flex:'1',minWidth:'150px'}} title="Sort events"><option value="name">Sort: Name (A–Z)</option><option value="date">Sort: Date (newest)</option></select>
-        {canManage&&<button onClick={()=>{setShowAdd(true);setEditId(null);setFormError('');setForm({name:'',description:'',date:''});}} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontWeight:'600',cursor:'pointer',whiteSpace:'nowrap'}}>+ Add Event</button>}
+        {canManage&&<button onClick={()=>{setShowAdd(true);setEditId(null);setFormError('');setForm({name:'',description:'',date:'',type:''});}} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontWeight:'600',cursor:'pointer',whiteSpace:'nowrap'}}>+ Add Event</button>}
       </div>
 
       {showAdd&&canManage&&(
         <div style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
           <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>New Event</div>
           {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
-          <EventForm form={form} setForm={setForm} onSave={handleAdd} onCancel={()=>setShowAdd(false)} saveLabel="Create Event"/>
+          <EventForm form={form} setForm={setForm} onSave={handleAdd} onCancel={()=>setShowAdd(false)} saveLabel="Create Event" typeList={typeList} onAddType={addType}/>
         </div>
       )}
 
@@ -2550,44 +2601,60 @@ function EventsTab({events,payments,userRole}){
       {filtered.length>0&&(()=>{
         const th={padding:'8px 12px',fontSize:'11px',fontWeight:'700',color:'#64748B',textTransform:'uppercase',letterSpacing:'0.04em',textAlign:'left',background:'#F8FAFC',borderBottom:'1px solid #E2E8F0'};
         const cell={padding:'9px 12px',borderBottom:'1px solid #F1F5F9',verticalAlign:'top'};
+        const renderRow=(e)=>{
+          const isEditing=editId===e.id;
+          const count=countByName[(e.name||'').trim()]||0;
+          if(isEditing) return(
+            <tr key={e.id}><td colSpan={canManage?5:4} style={{padding:0}}>
+              <div style={{background:'#EFF6FF',border:'2px solid #BFDBFE',borderRadius:'12px',padding:'18px',margin:'8px'}}>
+                <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>Editing: {e.name}</div>
+                {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
+                <EventForm form={form} setForm={setForm} onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes" typeList={typeList} onAddType={addType}/>
+              </div>
+            </td></tr>
+          );
+          return(
+            <tr key={e.id}>
+              <td style={{...cell,fontWeight:'700',color:'#1E293B',fontSize:'13px',whiteSpace:'nowrap'}}>{e.name}</td>
+              <td style={{...cell,whiteSpace:'nowrap'}}>{e.date?<span style={{padding:'2px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#DBEAFE',color:'#1D4ED8'}}>📅 {e.date}</span>:<span style={{fontSize:'12px',color:'#CBD5E1'}}>—</span>}</td>
+              <td style={{...cell,whiteSpace:'nowrap'}}><span style={{padding:'2px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:count>0?'#F0FDFA':'#F1F5F9',color:count>0?'#0F766E':'#94A3B8'}}>{count}</span></td>
+              <td style={{...cell,fontSize:'12px',color:'#475569',lineHeight:'1.4'}}>{e.description||<span style={{color:'#CBD5E1'}}>—</span>}</td>
+              {canManage&&(
+                <td style={{...cell,whiteSpace:'nowrap',textAlign:'right'}}>
+                  <button onClick={()=>startEdit(e)} style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'7px',padding:'5px 11px',cursor:'pointer',color:'#1D4ED8',fontSize:'12px',fontWeight:'600',marginRight:'6px'}}>Edit</button>
+                  <button onClick={()=>handleDelete(e)} style={{background:'none',border:'1px solid #FECACA',borderRadius:'7px',padding:'5px 11px',cursor:'pointer',color:'#991B1B',fontSize:'12px'}}>Delete</button>
+                </td>
+              )}
+            </tr>
+          );
+        };
         return(
-          <div style={{border:'1px solid #E2E8F0',borderRadius:'12px',overflow:'hidden'}}>
-            <div style={{overflowX:'auto'}}>
-              <table style={{width:'100%',borderCollapse:'collapse',minWidth:'640px'}}>
-                <thead><tr>
-                  <th style={th}>Event</th><th style={th}>Date</th><th style={th}>Payments</th><th style={th}>Description</th>{canManage&&<th style={{...th,width:'150px'}}></th>}
-                </tr></thead>
-                <tbody>
-                  {filtered.map(e=>{
-                    const isEditing=editId===e.id;
-                    const count=countByName[(e.name||'').trim()]||0;
-                    if(isEditing) return(
-                      <tr key={e.id}><td colSpan={canManage?5:4} style={{padding:0}}>
-                        <div style={{background:'#EFF6FF',border:'2px solid #BFDBFE',borderRadius:'12px',padding:'18px',margin:'8px'}}>
-                          <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>Editing: {e.name}</div>
-                          {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
-                          <EventForm form={form} setForm={setForm} onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes"/>
-                        </div>
-                      </td></tr>
-                    );
-                    return(
-                      <tr key={e.id}>
-                        <td style={{...cell,fontWeight:'700',color:'#1E293B',fontSize:'13px',whiteSpace:'nowrap'}}>{e.name}</td>
-                        <td style={{...cell,whiteSpace:'nowrap'}}>{e.date?<span style={{padding:'2px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#DBEAFE',color:'#1D4ED8'}}>📅 {e.date}</span>:<span style={{fontSize:'12px',color:'#CBD5E1'}}>—</span>}</td>
-                        <td style={{...cell,whiteSpace:'nowrap'}}><span style={{padding:'2px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:count>0?'#F0FDFA':'#F1F5F9',color:count>0?'#0F766E':'#94A3B8'}}>{count}</span></td>
-                        <td style={{...cell,fontSize:'12px',color:'#475569',lineHeight:'1.4'}}>{e.description||<span style={{color:'#CBD5E1'}}>—</span>}</td>
-                        {canManage&&(
-                          <td style={{...cell,whiteSpace:'nowrap',textAlign:'right'}}>
-                            <button onClick={()=>startEdit(e)} style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'7px',padding:'5px 11px',cursor:'pointer',color:'#1D4ED8',fontSize:'12px',fontWeight:'600',marginRight:'6px'}}>Edit</button>
-                            <button onClick={()=>handleDelete(e)} style={{background:'none',border:'1px solid #FECACA',borderRadius:'7px',padding:'5px 11px',cursor:'pointer',color:'#991B1B',fontSize:'12px'}}>Delete</button>
-                          </td>
-                        )}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+          <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
+            {grouped.map(g=>{
+              const collapsed=isTypeCollapsed(g.key);
+              const isUntyped=g.key==='__untyped__';
+              const linked=g.items.reduce((s,e)=>s+(countByName[(e.name||'').trim()]||0),0);
+              return(
+                <div key={g.key} style={{border:'1px solid '+(isUntyped?'#E2E8F0':'#99F6E4'),borderRadius:'12px',overflow:'hidden'}}>
+                  <div onClick={()=>toggleType(g.key)} style={{display:'flex',alignItems:'center',gap:'10px',cursor:'pointer',padding:'10px 14px',background:isUntyped?'#F8FAFC':'#F0FDFA'}}>
+                    <span style={{fontSize:'12px',color:'#94A3B8',transform:collapsed?'rotate(-90deg)':'none',transition:'transform .15s'}}>▼</span>
+                    <span style={{fontSize:'14px',fontWeight:'700',color:isUntyped?'#64748B':'#0F766E'}}>{g.label}</span>
+                    <span style={{background:isUntyped?'#E2E8F0':'#CCFBF1',color:isUntyped?'#475569':'#0F766E',fontSize:'12px',fontWeight:'700',padding:'2px 9px',borderRadius:'20px'}}>{g.items.length}</span>
+                    {linked>0&&<span style={{fontSize:'11px',color:'#0F766E',fontWeight:'600'}}>{linked} payment{linked!==1?'s':''} linked</span>}
+                  </div>
+                  {!collapsed&&(
+                    <div style={{overflowX:'auto'}}>
+                      <table style={{width:'100%',borderCollapse:'collapse',minWidth:'640px'}}>
+                        <thead><tr>
+                          <th style={th}>Event</th><th style={th}>Date</th><th style={th}>Payments</th><th style={th}>Description</th>{canManage&&<th style={{...th,width:'150px'}}></th>}
+                        </tr></thead>
+                        <tbody>{g.items.map(renderRow)}</tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         );
       })()}
