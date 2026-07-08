@@ -78,6 +78,9 @@ const FS = {
   mou:           (id,data) => _db.collection('mous').doc(id).set(data).catch(e=>{console.error(e);throw e;}),
   mouUpdate:     (id,data) => _db.collection('mous').doc(id).update(data).catch(e=>{console.error(e);throw e;}),
   mouDelete:     (id)      => _db.collection('mous').doc(id).delete().catch(e=>{console.error(e);throw e;}),
+  event:         (id,data) => _db.collection('events').doc(id).set(data).catch(e=>{console.error(e);throw e;}),
+  eventUpdate:   (id,data) => _db.collection('events').doc(id).update(data).catch(e=>{console.error(e);throw e;}),
+  eventDelete:   (id)      => _db.collection('events').doc(id).delete().catch(e=>{console.error(e);throw e;}),
   todos:       (items) => _col('todos').set({items}).catch(console.error),
   amendments:  (items) => _col('amendments').set({items}).catch(console.error),
   tags:        (data)  => _col('auditTags').set({data}).catch(console.error),
@@ -191,7 +194,7 @@ function grantEnded(){return currentFY()>FY_LIST[FY_LIST.length-1];}
 
 // Role system
 const ROLES={director:'Director',admin_support:'Admin Support',team_member:'Team Member'};
-const ROLE_TAB_ACCESS={director:null,admin_support:['overview','fiscal','payments','mous','dataaudit'],team_member:['overview','fiscal','payments','mous']};
+const ROLE_TAB_ACCESS={director:null,admin_support:['overview','fiscal','payments','events','mous','dataaudit'],team_member:['overview','fiscal','payments','events','mous']};
 
 
 // ── Account labels ────────────────────────────────────────────────────────────
@@ -531,7 +534,9 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMember
   }
 
   return(
-    <div style={{display:'grid',gridTemplateColumns:'1fr 290px',gap:'22px'}}>
+    <div style={{display:'flex',flexDirection:'column',gap:'22px'}}>
+      <AccountGuide guide={accountGuide} setGuide={setAccountGuide} userRole={userRole}/>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 290px',gap:'22px'}}>
       <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:'10px'}}>
           <div><h2 style={{fontSize:'18px',fontWeight:'700',color:'#0F172A',margin:0}}>What needs your attention</h2>
@@ -702,7 +707,7 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMember
           ))}
         </div>
       </div>
-      <AccountGuide guide={accountGuide} setGuide={setAccountGuide} userRole={userRole}/>
+      </div>
     </div>
   );
 }
@@ -957,7 +962,7 @@ function LedgerTab({txns,enrichments,auditTags,onJumpToEnrich}){
   const [sortCol,setSortCol]=useState('date');
   const [sortDir,setSortDir]=useState('desc');
   const [page,setPage]=useState(0);
-  const PAGE=50;
+  const [pageSize,setPageSize]=useState(25); // 25 default; 0 = show all
 
   // Unique object codes from transactions (for individual code filter)
   const objCodes=useMemo(()=>{
@@ -977,6 +982,7 @@ function LedgerTab({txns,enrichments,auditTags,onJumpToEnrich}){
     return [...r].sort((a,b)=>{const v=sortCol==='amt'?a.amt-b.amt:(a[sortCol]||'').localeCompare(b[sortCol]||'');return sortDir==='asc'?v:-v;});
   },[txns,filters,sortCol,sortDir]);
 
+  const PAGE=pageSize>0?pageSize:Math.max(1,filtered.length);
   const pages=Math.ceil(filtered.length/PAGE);
   const shown=filtered.slice(page*PAGE,(page+1)*PAGE);
   function setF(k,v){
@@ -993,6 +999,11 @@ function LedgerTab({txns,enrichments,auditTags,onJumpToEnrich}){
       <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
         <span style={{padding:'4px 12px',background:'#FEF3C7',border:'1px solid #FED7AA',borderRadius:'6px',fontSize:'12px',fontWeight:'700',color:'#92400E'}}>READ ONLY — Source Data</span>
         <span style={{fontSize:'13px',color:'#64748B'}}>{filtered.length.toLocaleString()} of {txns.length.toLocaleString()} records</span>
+        <label style={{marginLeft:'auto',fontSize:'12px',color:'#64748B',display:'flex',alignItems:'center',gap:'6px'}}>Per page:
+          <select value={pageSize} onChange={e=>{setPageSize(parseInt(e.target.value));setPage(0);}} style={{border:'1px solid #E2E8F0',borderRadius:'8px',padding:'5px 8px',fontSize:'12px'}}>
+            <option value={5}>5</option><option value={10}>10</option><option value={25}>25</option><option value={100}>100</option><option value={0}>All</option>
+          </select>
+        </label>
       </div>
       <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr 1fr 1fr',gap:'8px'}}>
         <input placeholder="Search description, ref, category..." value={filters.search} onChange={e=>setF('search',e.target.value)} style={inp}/>
@@ -1073,7 +1084,7 @@ function EnrichmentTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,j
   const [batchNote,setBatchNote]=useState('');
   const [batchMode,setBatchMode]=useState(null); // 'desc' | 'note' | null
   const rowRefs=useRef({});
-  const PAGE=25;
+  const [pageSize,setPageSize]=useState(25); // 25 default; 0 = show all
   function setF(k,v){
     if(k==='sacs') setFilters(f=>({...f,sacs:v,objCode:''}));
     else setFilters(f=>({...f,[k]:v}));
@@ -1099,6 +1110,8 @@ function EnrichmentTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,j
     if(filters.tagged==='unverified') r=r.filter(t=>!(auditTags[t.id]||[]).includes('verified'));
     return r;
   },[txns,filters,enrichments,auditTags]);
+
+  const PAGE=pageSize>0?pageSize:Math.max(1,filtered.length);
 
   const pages=Math.ceil(filtered.length/PAGE);
   const shown=filtered.slice(page*PAGE,(page+1)*PAGE);
@@ -1176,6 +1189,11 @@ function EnrichmentTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,j
       <div style={{display:'flex',alignItems:'center',gap:'10px',flexWrap:'wrap'}}>
         <span style={{padding:'4px 12px',background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'6px',fontSize:'12px',fontWeight:'700',color:'#1E40AF'}}>ENRICHMENT LAYER — Edits do not affect source data</span>
         <span style={{fontSize:'13px',color:'#64748B'}}>{filtered.length.toLocaleString()} records shown</span>
+        <label style={{marginLeft:'auto',fontSize:'12px',color:'#64748B',display:'flex',alignItems:'center',gap:'6px'}}>Per page:
+          <select value={pageSize} onChange={e=>{setPageSize(parseInt(e.target.value));setPage(0);}} style={{border:'1px solid #E2E8F0',borderRadius:'8px',padding:'5px 8px',fontSize:'12px'}}>
+            <option value={5}>5</option><option value={10}>10</option><option value={25}>25</option><option value={100}>100</option><option value={0}>All</option>
+          </select>
+        </label>
       </div>
       <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr 1fr',gap:'8px'}}>
         <input placeholder="Search..." value={filters.search} onChange={e=>setF('search',e.target.value)} style={inp}/>
@@ -1296,8 +1314,14 @@ function btnStyle(enabled,color){return{padding:'6px 12px',borderRadius:'8px',fo
 // ── Audit Summary Tab ─────────────────────────────────────────────────────────
 function AuditSummaryTab({txns,enrichments,auditTags}){
   const [filterTag,setFilterTag]=useState('');
+  const [page,setPage]=useState(0);
+  const [pageSize,setPageSize]=useState(25); // 25 default; 0 = show all
   const tagged=txns.filter(t=>(auditTags[t.id]||[]).length>0);
   const filtered=filterTag?tagged.filter(t=>(auditTags[t.id]||[]).includes(filterTag)):tagged;
+  const PAGE=pageSize>0?pageSize:Math.max(1,filtered.length);
+  const pages=Math.ceil(filtered.length/PAGE);
+  const pageClamped=Math.min(page,Math.max(0,pages-1));
+  const shown=filtered.slice(pageClamped*PAGE,(pageClamped+1)*PAGE);
   const byTag=AUDIT_TAGS.map(tag=>({...tag,count:tagged.filter(t=>(auditTags[t.id]||[]).includes(tag.id)).length,total:tagged.filter(t=>(auditTags[t.id]||[]).includes(tag.id)).reduce((s,t)=>s+Math.abs(t.amt),0)})).filter(t=>t.count>0);
   const th={padding:'10px 16px',fontSize:'11px',fontWeight:'700',color:'#64748B',textTransform:'uppercase',letterSpacing:'0.05em',textAlign:'left',background:'#F8FAFC',borderBottom:'1px solid #E2E8F0'};
   const td={padding:'10px 16px',fontSize:'12px',color:'#334155',borderBottom:'1px solid #F8FAFC'};
@@ -1309,11 +1333,18 @@ function AuditSummaryTab({txns,enrichments,auditTags}){
         <KpiCard label="Tag Types Active" value={byTag.length} accent="#64748B"/>
       </div>
       <div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',padding:'16px'}}>
-        <div style={{fontWeight:'600',fontSize:'14px',color:'#1E293B',marginBottom:'12px'}}>Filter by Tag</div>
+        <div style={{display:'flex',alignItems:'center',marginBottom:'12px'}}>
+          <div style={{fontWeight:'600',fontSize:'14px',color:'#1E293B'}}>Filter by Tag</div>
+          <label style={{marginLeft:'auto',fontSize:'12px',color:'#64748B',display:'flex',alignItems:'center',gap:'6px'}}>Per page:
+            <select value={pageSize} onChange={e=>{setPageSize(parseInt(e.target.value));setPage(0);}} style={{border:'1px solid #E2E8F0',borderRadius:'8px',padding:'5px 8px',fontSize:'12px'}}>
+              <option value={5}>5</option><option value={10}>10</option><option value={25}>25</option><option value={100}>100</option><option value={0}>All</option>
+            </select>
+          </label>
+        </div>
         <div style={{display:'flex',flexWrap:'wrap',gap:'8px'}}>
-          <button onClick={()=>setFilterTag('')} style={{padding:'6px 14px',borderRadius:'20px',fontSize:'12px',fontWeight:'600',border:'1px solid',cursor:'pointer',background:!filterTag?'#1E293B':'white',color:!filterTag?'white':'#64748B',borderColor:!filterTag?'#1E293B':'#E2E8F0'}}>All ({tagged.length})</button>
+          <button onClick={()=>{setFilterTag('');setPage(0);}} style={{padding:'6px 14px',borderRadius:'20px',fontSize:'12px',fontWeight:'600',border:'1px solid',cursor:'pointer',background:!filterTag?'#1E293B':'white',color:!filterTag?'white':'#64748B',borderColor:!filterTag?'#1E293B':'#E2E8F0'}}>All ({tagged.length})</button>
           {byTag.map(tag=>(
-            <button key={tag.id} onClick={()=>setFilterTag(filterTag===tag.id?'':tag.id)} style={{padding:'6px 14px',borderRadius:'20px',fontSize:'12px',fontWeight:'700',border:'1px solid',cursor:'pointer',background:filterTag===tag.id?tag.color:tag.bg,color:filterTag===tag.id?'white':tag.color,borderColor:tag.color}}>
+            <button key={tag.id} onClick={()=>{setFilterTag(filterTag===tag.id?'':tag.id);setPage(0);}} style={{padding:'6px 14px',borderRadius:'20px',fontSize:'12px',fontWeight:'700',border:'1px solid',cursor:'pointer',background:filterTag===tag.id?tag.color:tag.bg,color:filterTag===tag.id?'white':tag.color,borderColor:tag.color}}>
               {tag.label} ({tag.count}) · {fmtK(tag.total)}
             </button>
           ))}
@@ -1329,7 +1360,7 @@ function AuditSummaryTab({txns,enrichments,auditTags}){
               {['Date','Account','Description','Category','Amount','Tags','Notes'].map((h,i)=><th key={h} style={{...th,textAlign:i===4?'right':'left'}}>{h}</th>)}
             </tr></thead>
             <tbody>
-              {filtered.map(t=>{
+              {shown.map(t=>{
                 const enr=enrichments[t.id]||{};const tags=auditTags[t.id]||[];
                 return(
                   <tr key={t.id} style={{background:'white'}} onMouseOver={e=>e.currentTarget.style.background='#F8FAFC'} onMouseOut={e=>e.currentTarget.style.background='white'}>
@@ -1346,7 +1377,7 @@ function AuditSummaryTab({txns,enrichments,auditTags}){
             </tbody>
             <tfoot>
               <tr style={{background:'#F8FAFC',fontWeight:'700'}}>
-                <td colSpan={4} style={td}>Subtotal ({filtered.length} items)</td>
+                <td colSpan={4} style={td}>Subtotal — all {filtered.length} filtered item{filtered.length!==1?'s':''}</td>
                 <td style={{...td,textAlign:'right'}}>{fmt(filtered.reduce((s,t)=>s+Math.abs(t.amt),0))}</td>
                 <td colSpan={2}/>
               </tr>
@@ -1354,6 +1385,15 @@ function AuditSummaryTab({txns,enrichments,auditTags}){
           </table>
         </div>
       }
+      {pages>1&&(
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <span style={{fontSize:'13px',color:'#64748B'}}>Page {pageClamped+1} of {pages} · {filtered.length} tagged records</span>
+          <div style={{display:'flex',gap:'8px'}}>
+            <button disabled={pageClamped===0} onClick={()=>setPage(p=>Math.max(0,p-1))} style={{padding:'7px 16px',borderRadius:'8px',border:'1px solid #E2E8F0',background:'white',cursor:pageClamped===0?'not-allowed':'pointer',color:pageClamped===0?'#CBD5E1':'#334155',fontWeight:'600',fontSize:'13px'}}>Prev</button>
+            <button disabled={pageClamped>=pages-1} onClick={()=>setPage(p=>p+1)} style={{padding:'7px 16px',borderRadius:'8px',border:'1px solid #E2E8F0',background:'white',cursor:pageClamped>=pages-1?'not-allowed':'pointer',color:pageClamped>=pages-1?'#CBD5E1':'#334155',fontWeight:'600',fontSize:'13px'}}>Next</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1956,7 +1996,7 @@ const COE_REIMB_STATUSES={
   received:    {label:'Reimbursement Received',color:'#059669',bg:'#D1FAE5'},
 };
 
-function PartnerPaymentsTab({payments,userRole,txns,mous}){
+function PartnerPaymentsTab({payments,userRole,txns,mous,events}){
   const canManage=userRole==='director'||userRole==='admin_support';
   const [filterSource,setFilterSource]=useState('');
   const [filterStatus,setFilterStatus]=useState('');
@@ -1964,7 +2004,7 @@ function PartnerPaymentsTab({payments,userRole,txns,mous}){
   const [filterFY,setFilterFY]=useState('');
   const [filterEvent,setFilterEvent]=useState('');
   const [search,setSearch]=useState('');
-  const [collapsedGroups,setCollapsedGroups]=useState(()=>new Set());
+  const [groupSort,setGroupSort]=useState('alpha'); // 'alpha'|'org'|'individual'|'status'
   // Events typed via "+ New event" that have no payment yet — kept so they
   // appear in the dropdown until a payment is assigned to them.
   const [pendingEvents,setPendingEvents]=useState([]);
@@ -1979,10 +2019,11 @@ function PartnerPaymentsTab({payments,userRole,txns,mous}){
   // All known event names, sorted, for dropdowns and the filter
   const eventList=useMemo(()=>{
     const s=new Set();
-    payments.forEach(p=>{if(p.event&&p.event.trim())s.add(p.event.trim());});
+    (events||[]).forEach(e=>{if(e.name&&e.name.trim())s.add(e.name.trim());}); // collection events (source of truth)
+    payments.forEach(p=>{if(p.event&&p.event.trim())s.add(p.event.trim());}); // legacy free-text on payments
     pendingEvents.forEach(e=>{if(e&&e.trim())s.add(e.trim());});
     return[...s].sort((a,b)=>a.localeCompare(b));
-  },[payments,pendingEvents]);
+  },[payments,pendingEvents,events]);
   function addEventName(name){setPendingEvents(prev=>prev.includes(name)?prev:[...prev,name]);}
 
   const filtered=useMemo(()=>{
@@ -2004,12 +2045,29 @@ function PartnerPaymentsTab({payments,userRole,txns,mous}){
   const grouped=useMemo(()=>{
     const byEvent={};
     filtered.forEach(p=>{const key=(p.event||'').trim()||'__unassigned__';(byEvent[key]=byEvent[key]||[]).push(p);});
+    // Within-group sort: default alphabetical by recipient, or by organization,
+    // individual/contact name, or payment status.
+    const orgOf=p=>(p.organization||p.recipient||'').toLowerCase();
+    const indivOf=p=>(p.contactName||(p.recipientType==='Individual'?p.recipient:'')||'').toLowerCase();
+    const sorters={
+      alpha:(a,b)=>(a.recipient||'').toLowerCase().localeCompare((b.recipient||'').toLowerCase()),
+      org:(a,b)=>orgOf(a).localeCompare(orgOf(b)),
+      individual:(a,b)=>indivOf(a).localeCompare(indivOf(b)),
+      status:(a,b)=>{const rank=s=>normPayStatus(s)==='unpaid'?0:1;return rank(a.status)-rank(b.status)||(a.recipient||'').localeCompare(b.recipient||'');},
+    };
+    const cmp=sorters[groupSort]||sorters.alpha;
+    Object.keys(byEvent).forEach(k=>byEvent[k].sort(cmp));
     const namedKeys=Object.keys(byEvent).filter(k=>k!=='__unassigned__').sort((a,b)=>a.localeCompare(b));
     const groups=namedKeys.map(k=>({key:k,label:k,items:byEvent[k]}));
     if(byEvent['__unassigned__']) groups.push({key:'__unassigned__',label:'Unassigned / No Event',items:byEvent['__unassigned__']});
     return groups;
-  },[filtered]);
-  function toggleGroup(key){setCollapsedGroups(s=>{const n=new Set(s);n.has(key)?n.delete(key):n.add(key);return n;});}
+  },[filtered,groupSort]);
+  // Groups start collapsed by default. We track which groups the user has
+  // explicitly opened; everything else renders collapsed. `openedGroups`
+  // holds keys the user toggled — combined with the default via isCollapsed().
+  const [openedGroups,setOpenedGroups]=useState(()=>new Set());
+  function isCollapsed(key){return !openedGroups.has(key);}
+  function toggleGroupCollapse(key){setOpenedGroups(s=>{const n=new Set(s);n.has(key)?n.delete(key):n.add(key);return n;});}
 
   const totalAmt=payments.reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
   const outstanding=payments.filter(p=>normPayStatus(p.status)!=='paid');
@@ -2135,6 +2193,7 @@ async function handleCoeReimbUpdate(p,newStatus){
         <select value={filterType} onChange={e=>setFilterType(e.target.value)} style={{...inp,flex:1,minWidth:'110px'}}><option value="">All Types</option>{PAY_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select>
         <select value={filterFY} onChange={e=>setFilterFY(e.target.value)} style={{...inp,flex:1,minWidth:'100px'}}><option value="">All Years</option>{FY_LIST.map(f=><option key={f} value={f}>{f}</option>)}</select>
         <select value={filterEvent} onChange={e=>setFilterEvent(e.target.value)} style={{...inp,flex:1,minWidth:'150px'}}><option value="">All Events</option>{eventList.map(ev=><option key={ev} value={ev}>{ev}</option>)}<option value="__unassigned__">Unassigned / No Event</option></select>
+        <select value={groupSort} onChange={e=>setGroupSort(e.target.value)} style={{...inp,flex:1,minWidth:'150px'}} title="Sort within each event group"><option value="alpha">Sort: Recipient (A–Z)</option><option value="org">Sort: Organization</option><option value="individual">Sort: Individual</option><option value="status">Sort: Payment Status</option></select>
         {canManage&&<button onClick={()=>{setShowAdd(true);setEditId(null);setFormError('');setForm({...EMPTY_PAY,fyYear:activeGrantFY()});}} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontWeight:'600',cursor:'pointer',whiteSpace:'nowrap'}}>+ Add Payment</button>}
       </div>
 
@@ -2163,47 +2222,44 @@ async function handleCoeReimbUpdate(p,newStatus){
           const matchedTxn=p.txnId?(txns||[]).find(t=>t.id===p.txnId):null;
 
           if(isEditing) return(
-            <div key={p.id} style={{background:'#EFF6FF',border:'2px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
+            <tr key={p.id}><td colSpan={9} style={{padding:0}}>
+            <div style={{background:'#EFF6FF',border:'2px solid #BFDBFE',borderRadius:'12px',padding:'18px',margin:'8px'}}>
               <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>Editing: {p.recipient}</div>
               {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
               <PayForm form={form} setForm={setForm} onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes" txns={txns} mous={mous} events={eventList} onAddEvent={addEventName}/>
             </div>
+            </td></tr>
           );
 
           return(
-            <div key={p.id} style={{background:'white',borderRadius:'12px',border:status==='unpaid'?'1px solid #FECACA':'1px solid #E2E8F0',overflow:'hidden'}}>
-              {/* Card header — labels are the focal point */}
-              <div style={{display:'flex',alignItems:'flex-start',gap:'14px',padding:'14px 16px',cursor:'pointer'}} onClick={()=>setExpandedId(isExpanded?null:p.id)}>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{display:'flex',alignItems:'center',gap:'7px',flexWrap:'wrap',marginBottom:'6px'}}>
-                    <span style={{fontWeight:'700',color:'#1E293B',fontSize:'15px'}}>{p.recipient}</span>
-                    <span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#1A6B7A',color:'white'}}>{p.fyYear}</span>
-                    <span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:tc.bg,color:tc.c}}>{p.paymentType}</span>
-                    <span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:sc.bg,color:sc.c}}>{srcLabel[p.fundingSource]||p.fundingSource}</span>
-                    <span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#F3F4F6',color:'#374151'}}>{p.recipientType}</span>
-                    {crs&&<span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:crs.bg,color:crs.color}}>{crs.label}</span>}
-                  </div>
-                  <div style={{fontSize:'13px',color:'#475569',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'520px'}}>{p.description}</div>
-                  <div style={{display:'flex',gap:'12px',marginTop:'5px',flexWrap:'wrap'}}>
-                    {p.contactName&&<span style={{fontSize:'11px',color:'#475569',fontWeight:'600'}}>👤 {p.contactName}</span>}
-                    {(p.notes||[]).length>0&&<span style={{fontSize:'11px',color:'#1D4ED8',fontWeight:'600'}}>💬 {p.notes.length} note{p.notes.length!==1?'s':''}</span>}
-                    {matchedTxn&&<span style={{fontSize:'11px',color:'#047857',fontWeight:'600'}}>✓ Ledger matched · {matchedTxn.date}</span>}
-                    {p.agreementRef&&<span style={{fontSize:'11px',color:'#94A3B8'}}>Ref: {p.agreementRef}</span>}
-                    {p.mouId&&(()=>{const m=(mous||[]).find(x=>x.id===p.mouId);return m?<span style={{fontSize:'11px',color:'#6D28D9',fontWeight:'600'}}>📝 MOU: {m.partner}</span>:null;})()}
-                  </div>
-                </div>
-                <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'6px',flexShrink:0}}>
-                  <div style={{fontWeight:'700',fontSize:'16px',color:'#1E293B'}}>{fmt(parseFloat(p.amount)||0)}</div>
-                  <span style={{padding:'4px 12px',borderRadius:'20px',fontSize:'12px',fontWeight:'700',background:ps.bg,color:ps.color}}>{ps.label}</span>
-                  {status==='paid'&&p.paidAmount&&parseFloat(p.paidAmount)!==parseFloat(p.amount)&&<div style={{fontSize:'11px',color:'#059669'}}>Paid: {fmt(parseFloat(p.paidAmount)||0)}</div>}
-                </div>
-                <div style={{color:'#94A3B8',fontSize:'14px',flexShrink:0,marginTop:'2px'}}>{isExpanded?'▲':'▼'}</div>
-              </div>
-
-              {/* Expanded details */}
+            <React.Fragment key={p.id}>
+              {/* Dense table row — scannable; click to expand */}
+              <tr onClick={()=>setExpandedId(isExpanded?null:p.id)} style={{cursor:'pointer',background:isExpanded?'#F8FAFC':'white',borderLeft:status==='unpaid'?'3px solid #FCA5A5':'3px solid transparent'}}>
+                <td style={{padding:'9px 12px',borderBottom:'1px solid #F1F5F9'}}>
+                  <div style={{fontWeight:'600',fontSize:'13px',color:'#1E293B'}}>{p.recipient}</div>
+                  {p.contactName&&<div style={{fontSize:'11px',color:'#94A3B8'}}>👤 {p.contactName}</div>}
+                </td>
+                <td style={{padding:'9px 12px',borderBottom:'1px solid #F1F5F9',maxWidth:'240px'}}><div style={{fontSize:'12px',color:'#475569',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.description}</div></td>
+                <td style={{padding:'9px 12px',borderBottom:'1px solid #F1F5F9'}}><span style={{padding:'2px 8px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:tc.bg,color:tc.c}}>{p.paymentType}</span></td>
+                <td style={{padding:'9px 12px',borderBottom:'1px solid #F1F5F9'}}><span style={{padding:'2px 8px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:sc.bg,color:sc.c}}>{p.fundingSource==='coe'?'COE':'Primary'}</span></td>
+                <td style={{padding:'9px 12px',borderBottom:'1px solid #F1F5F9',fontSize:'11px',color:'#64748B',fontWeight:'600'}}>{p.fyYear}</td>
+                <td style={{padding:'9px 12px',borderBottom:'1px solid #F1F5F9',textAlign:'right',fontWeight:'700',fontSize:'13px',color:'#1E293B',whiteSpace:'nowrap'}}>{fmt(parseFloat(p.amount)||0)}</td>
+                <td style={{padding:'9px 12px',borderBottom:'1px solid #F1F5F9',whiteSpace:'nowrap'}}>{matchedTxn?<span style={{fontSize:'11px',color:'#047857',fontWeight:'600'}}>✓ {matchedTxn.date}</span>:<span style={{fontSize:'11px',color:'#CBD5E1'}}>—</span>}</td>
+                <td style={{padding:'9px 12px',borderBottom:'1px solid #F1F5F9'}}><span style={{padding:'3px 10px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:ps.bg,color:ps.color}}>{ps.label}</span></td>
+                <td style={{padding:'9px 12px',borderBottom:'1px solid #F1F5F9',color:'#94A3B8',fontSize:'12px',textAlign:'center'}}>{isExpanded?'▲':'▼'}</td>
+              </tr>
               {isExpanded&&(
-                <div style={{borderTop:'1px solid #F1F5F9',padding:'16px',display:'flex',flexDirection:'column',gap:'14px'}}>
-                  {/* Details row */}
+                <tr>
+                  <td colSpan={9} style={{padding:0,borderBottom:'1px solid #E2E8F0',background:'#F8FAFC'}}>
+                  <div style={{padding:'16px',display:'flex',flexDirection:'column',gap:'14px'}}>
+                    {/* Labels row (moved here from the old card header) */}
+                    <div style={{display:'flex',alignItems:'center',gap:'7px',flexWrap:'wrap'}}>
+                      <span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#1A6B7A',color:'white'}}>{p.fyYear}</span>
+                      <span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#F3F4F6',color:'#374151'}}>{p.recipientType}</span>
+                      {crs&&<span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:crs.bg,color:crs.color}}>{crs.label}</span>}
+                      {(p.notes||[]).length>0&&<span style={{fontSize:'11px',color:'#1D4ED8',fontWeight:'600'}}>💬 {p.notes.length} note{p.notes.length!==1?'s':''}</span>}
+                      {p.mouId&&(()=>{const m=(mous||[]).find(x=>x.id===p.mouId);return m?<span style={{fontSize:'11px',color:'#6D28D9',fontWeight:'600'}}>📝 MOU: {m.partner}</span>:null;})()}
+                    </div>
                   <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'10px',background:'#F8FAFC',borderRadius:'8px',padding:'12px'}}>
                     {[['Agreement Ref',p.agreementRef||'—'],['Expected Date',p.expectedDate||'—'],['Paid Date',p.paidDate||'—'],['Ledger Match',matchedTxn?matchedTxn.date+' · '+fmt(matchedTxn.amt):(p.txnId||'—')]].map(([l,v])=>(
                       <div key={l}><div style={{fontSize:'10px',color:'#94A3B8',fontWeight:'600',marginBottom:'2px'}}>{l}</div><div style={{fontSize:'12px',fontWeight:'600',color:v==='—'?'#CBD5E1':'#1E293B'}}>{v}</div></div>
@@ -2281,23 +2337,27 @@ async function handleCoeReimbUpdate(p,newStatus){
                       <button onClick={(e)=>{e.stopPropagation();handleDelete(p);}} style={{background:'none',border:'1px solid #FECACA',borderRadius:'7px',padding:'6px 12px',cursor:'pointer',color:'#991B1B',fontSize:'12px'}}>Delete</button>
                     </div>
                   )}
-                </div>
+                  </div>
+                  </td>
+                </tr>
               )}
-            </div>
+            </React.Fragment>
           );
         };
+        // Table-header cells for the dense group tables
+        const th={padding:'8px 12px',fontSize:'11px',fontWeight:'700',color:'#64748B',textTransform:'uppercase',letterSpacing:'0.04em',textAlign:'left',background:'#F8FAFC',borderBottom:'1px solid #E2E8F0'};
         return(
-          <div style={{display:'flex',flexDirection:'column',gap:'18px'}}>
+          <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
             {grouped.map(g=>{
-              const collapsed=collapsedGroups.has(g.key);
+              const collapsed=isCollapsed(g.key);
               const groupTotal=g.items.reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
               const groupUnpaid=g.items.filter(p=>normPayStatus(p.status)!=='paid').length;
               const groupPaid=g.items.length-groupUnpaid;
               const isUnassigned=g.key==='__unassigned__';
               return(
-                <div key={g.key}>
+                <div key={g.key} style={{border:'1px solid '+(isUnassigned?'#E2E8F0':'#99F6E4'),borderRadius:'12px',overflow:'hidden'}}>
                   {/* Group header */}
-                  <div onClick={()=>toggleGroup(g.key)} style={{display:'flex',alignItems:'center',gap:'10px',cursor:'pointer',padding:'8px 10px',background:isUnassigned?'#F8FAFC':'#F0FDFA',border:'1px solid '+(isUnassigned?'#E2E8F0':'#99F6E4'),borderRadius:'10px',marginBottom:collapsed?0:'10px'}}>
+                  <div onClick={()=>toggleGroupCollapse(g.key)} style={{display:'flex',alignItems:'center',gap:'10px',cursor:'pointer',padding:'10px 14px',background:isUnassigned?'#F8FAFC':'#F0FDFA'}}>
                     <span style={{fontSize:'12px',color:'#94A3B8',transform:collapsed?'rotate(-90deg)':'none',transition:'transform .15s'}}>▼</span>
                     <span style={{fontSize:'14px',fontWeight:'700',color:isUnassigned?'#64748B':'#0F766E'}}>{g.label}</span>
                     <span style={{background:isUnassigned?'#E2E8F0':'#CCFBF1',color:isUnassigned?'#475569':'#0F766E',fontSize:'12px',fontWeight:'700',padding:'2px 9px',borderRadius:'20px'}}>{g.items.length}</span>
@@ -2307,8 +2367,17 @@ async function handleCoeReimbUpdate(p,newStatus){
                     </div>
                     <span style={{marginLeft:'auto',fontSize:'13px',fontWeight:'700',color:'#1E293B'}}>{fmt(groupTotal)}</span>
                   </div>
-                  {/* Group cards */}
-                  {!collapsed&&<div style={{display:'flex',flexDirection:'column',gap:'10px'}}>{g.items.map(renderCard)}</div>}
+                  {/* Dense table of payments in this group */}
+                  {!collapsed&&(
+                    <div style={{overflowX:'auto'}}>
+                      <table style={{width:'100%',borderCollapse:'collapse',minWidth:'760px'}}>
+                        <thead><tr>
+                          <th style={th}>Recipient</th><th style={th}>Purpose</th><th style={th}>Type</th><th style={th}>Source</th><th style={th}>FY</th><th style={{...th,textAlign:'right'}}>Amount</th><th style={th}>Ledger</th><th style={th}>Status</th><th style={{...th,width:'32px'}}></th>
+                        </tr></thead>
+                        <tbody>{g.items.map(renderCard)}</tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -2319,6 +2388,189 @@ async function handleCoeReimbUpdate(p,newStatus){
   );
 }
 
+
+
+// ── Events Tab ─────────────────────────────────────────────────────────────────
+// Persistent events (name, description, date) in the /events collection. These
+// are the source of truth for the Partner Payments "Event / Activity" dropdown.
+// Payments link to events BY NAME (link-by-name, agreed 2026-07): renaming an
+// event here rewrites the event field on every payment currently referencing
+// the old name, so the change propagates. Access mirrors Payments/MOUs:
+// everyone views, managers create/edit/delete.
+function EventsTab({events,payments,userRole}){
+  const canManage=userRole==='director'||userRole==='admin_support';
+  const [search,setSearch]=useState('');
+  const [showAdd,setShowAdd]=useState(false);
+  const [editId,setEditId]=useState(null);
+  const [form,setForm]=useState({name:'',description:'',date:''});
+  const [formError,setFormError]=useState('');
+
+  // Count payments per event name (link-by-name) for the "used by" indicator
+  const countByName=useMemo(()=>{
+    const m={};(payments||[]).forEach(p=>{const n=(p.event||'').trim();if(n)m[n]=(m[n]||0)+1;});
+    return m;
+  },[payments]);
+
+  // Legacy events: names that exist on payments but have no /events record yet.
+  // Surface them so they can be formalized (given a description/date).
+  const orphanNames=useMemo(()=>{
+    const known=new Set((events||[]).map(e=>(e.name||'').trim()));
+    return Object.keys(countByName).filter(n=>!known.has(n)).sort((a,b)=>a.localeCompare(b));
+  },[events,countByName]);
+
+  const filtered=useMemo(()=>{
+    let r=events;
+    if(search){const q=search.toLowerCase();r=r.filter(e=>(e.name||'').toLowerCase().includes(q)||(e.description||'').toLowerCase().includes(q));}
+    return[...r].sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  },[events,search]);
+
+  async function handleAdd(){
+    setFormError('');
+    const name=form.name.trim();
+    if(!name){setFormError('Event name is required.');return;}
+    if((events||[]).some(e=>(e.name||'').trim().toLowerCase()===name.toLowerCase())){setFormError('An event with that name already exists.');return;}
+    const u=_auth.currentUser;if(!u){setFormError('You are not signed in.');return;}
+    const id='e'+Date.now();const now=new Date().toISOString().slice(0,10);
+    try{
+      await FS.event(id,{id,name,description:form.description.trim(),date:form.date,createdAt:now,createdBy:u.displayName||u.email,createdByEmail:u.email});
+      logActivity('event_created',`Created event: "${name}"`,{date:form.date});
+      setShowAdd(false);setForm({name:'',description:'',date:''});
+    }catch(err){
+      setFormError('Could not save event: '+(err&&err.message?err.message:'unknown error')+'. This is usually a permissions issue — confirm your role in Manage Team.');
+    }
+  }
+
+  async function handleUpdate(){
+    setFormError('');
+    const name=form.name.trim();
+    if(!name){setFormError('Event name is required.');return;}
+    const before=events.find(e=>e.id===editId);
+    if(!before){setEditId(null);return;}
+    const oldName=(before.name||'').trim();
+    // Name collision guard (against OTHER events)
+    if((events||[]).some(e=>e.id!==editId&&(e.name||'').trim().toLowerCase()===name.toLowerCase())){setFormError('Another event already uses that name.');return;}
+    const affected=oldName&&oldName!==name?(payments||[]).filter(p=>(p.event||'').trim()===oldName):[];
+    if(affected.length>0){
+      if(!window.confirm(`Renaming "${oldName}" to "${name}" will update the event on ${affected.length} payment${affected.length!==1?'s':''}. Continue?`)) return;
+    }
+    try{
+      await FS.eventUpdate(editId,{name,description:form.description.trim(),date:form.date});
+      // Propagate rename to all payments referencing the old name (link-by-name)
+      if(affected.length>0){
+        for(const p of affected){ await FS.paymentUpdate(p.id,{event:name}); }
+        logActivity('event_renamed',`Renamed event "${oldName}" → "${name}" (${affected.length} payment${affected.length!==1?'s':''} updated)`,{count:affected.length});
+      }else{
+        logActivity('event_updated',`Updated event: "${name}"`,{});
+      }
+      setEditId(null);
+    }catch(err){
+      setFormError('Could not save changes: '+(err&&err.message?err.message:'unknown error')+'. This is usually a permissions issue — confirm your role in Manage Team.');
+    }
+  }
+
+  async function handleDelete(e){
+    const count=countByName[(e.name||'').trim()]||0;
+    const msg=count>0
+      ? `Delete event "${e.name}"? ${count} payment${count!==1?'s':''} reference it — those payments will keep the event name as free text but the event record (description/date) will be gone. Continue?`
+      : `Delete event "${e.name}"? This cannot be undone.`;
+    if(!window.confirm(msg)) return;
+    await FS.eventDelete(e.id);
+    logActivity('event_removed',`Deleted event: "${e.name}"`,{id:e.id});
+  }
+
+  // Formalize a legacy free-text event name into a real record
+  function formalize(name){setShowAdd(true);setEditId(null);setFormError('');setForm({name,description:'',date:''});}
+  function startEdit(e){setEditId(e.id);setShowAdd(false);setFormError('');setForm({name:e.name||'',description:e.description||'',date:e.date||''});}
+
+  const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'7px 10px',fontSize:'13px',width:'100%'};
+
+  function EventForm({onSave,onCancel,saveLabel}){
+    return(
+      <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
+        <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:'10px'}}>
+          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Event Name *</label><input value={form.name} onChange={ev=>setForm(p=>({...p,name:ev.target.value}))} placeholder="e.g. Math CoP Spring 2026" style={inp}/></div>
+          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Date</label><input type="date" value={form.date} onChange={ev=>setForm(p=>({...p,date:ev.target.value}))} style={inp}/></div>
+        </div>
+        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Description</label><textarea value={form.description} onChange={ev=>setForm(p=>({...p,description:ev.target.value}))} placeholder="What is this event or activity?" rows={2} style={{...inp,resize:'vertical'}}/></div>
+        <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
+          <button onClick={onCancel} style={{border:'1px solid #E2E8F0',background:'white',borderRadius:'8px',padding:'8px 16px',cursor:'pointer',color:'#64748B',fontSize:'13px'}}>Cancel</button>
+          <button onClick={onSave} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontWeight:'600',cursor:'pointer',fontSize:'13px'}}>{saveLabel}</button>
+        </div>
+      </div>
+    );
+  }
+
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'12px'}}>
+        <KpiCard label="Total Events" value={events.length} accent="#64748B"/>
+        <KpiCard label="Payments Linked" value={Object.values(countByName).reduce((a,b)=>a+b,0)} sub="across all events" accent="#1A6B7A"/>
+        <KpiCard label="Unformalized Names" value={orphanNames.length} sub="on payments, no record yet" accent="#D97706"/>
+      </div>
+
+      <div style={{display:'flex',gap:'8px',flexWrap:'wrap',alignItems:'center'}}>
+        <input placeholder="Search events..." value={search} onChange={e=>setSearch(e.target.value)} style={{...inp,flex:'2',minWidth:'200px'}}/>
+        {canManage&&<button onClick={()=>{setShowAdd(true);setEditId(null);setFormError('');setForm({name:'',description:'',date:''});}} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontWeight:'600',cursor:'pointer',whiteSpace:'nowrap'}}>+ Add Event</button>}
+      </div>
+
+      {showAdd&&canManage&&(
+        <div style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
+          <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>New Event</div>
+          {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
+          <EventForm onSave={handleAdd} onCancel={()=>setShowAdd(false)} saveLabel="Create Event"/>
+        </div>
+      )}
+
+      {/* Legacy free-text event names that could be formalized */}
+      {canManage&&orphanNames.length>0&&(
+        <div style={{background:'#FFFBEB',border:'1px solid #FDE68A',borderRadius:'12px',padding:'14px 16px'}}>
+          <div style={{fontSize:'12px',fontWeight:'700',color:'#92400E',marginBottom:'8px'}}>Event names used on payments without a record yet</div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:'8px'}}>
+            {orphanNames.map(n=>(
+              <button key={n} onClick={()=>formalize(n)} style={{background:'white',border:'1px solid #FDE68A',borderRadius:'20px',padding:'5px 12px',fontSize:'12px',color:'#92400E',cursor:'pointer',fontWeight:'600'}}>
+                {n} <span style={{color:'#B45309'}}>({countByName[n]})</span> <span style={{color:'#059669'}}>+ formalize</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {filtered.length===0&&<div style={{background:'white',border:'2px dashed #E2E8F0',borderRadius:'12px',padding:'40px',textAlign:'center'}}><div style={{fontSize:'32px',marginBottom:'8px'}}>📅</div><p style={{color:'#64748B',fontWeight:'500',margin:0}}>{events.length===0?'No events created yet.':'No events match your search.'}</p>{canManage&&events.length===0&&<p style={{color:'#94A3B8',fontSize:'13px',margin:'6px 0 0'}}>Click "+ Add Event" to create your first event.</p>}</div>}
+
+      <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+        {filtered.map(e=>{
+          const isEditing=editId===e.id;
+          const count=countByName[(e.name||'').trim()]||0;
+          if(isEditing) return(
+            <div key={e.id} style={{background:'#EFF6FF',border:'2px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
+              <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>Editing: {e.name}</div>
+              {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
+              <EventForm onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes"/>
+            </div>
+          );
+          return(
+            <div key={e.id} style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',padding:'14px 16px',display:'flex',alignItems:'flex-start',gap:'14px'}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap',marginBottom:'4px'}}>
+                  <span style={{fontWeight:'700',color:'#1E293B',fontSize:'15px'}}>{e.name}</span>
+                  {e.date&&<span style={{padding:'2px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#DBEAFE',color:'#1D4ED8'}}>📅 {e.date}</span>}
+                  <span style={{padding:'2px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:count>0?'#F0FDFA':'#F1F5F9',color:count>0?'#0F766E':'#94A3B8'}}>{count} payment{count!==1?'s':''}</span>
+                </div>
+                {e.description&&<div style={{fontSize:'13px',color:'#475569',lineHeight:'1.5'}}>{e.description}</div>}
+              </div>
+              {canManage&&(
+                <div style={{display:'flex',gap:'8px',flexShrink:0}}>
+                  <button onClick={()=>startEdit(e)} style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'7px',padding:'6px 12px',cursor:'pointer',color:'#1D4ED8',fontSize:'12px',fontWeight:'600'}}>Edit</button>
+                  <button onClick={()=>handleDelete(e)} style={{background:'none',border:'1px solid #FECACA',borderRadius:'7px',padding:'6px 12px',cursor:'pointer',color:'#991B1B',fontSize:'12px'}}>Delete</button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 // ── MOUs Tab ───────────────────────────────────────────────────────────────────
 // Records Memorandums of Understanding with partner COEs/districts. One-time
@@ -2592,6 +2844,10 @@ function LogTab({logs}){
     'mou_edited':{label:'MOU Edited',color:'#1D4ED8',bg:'#DBEAFE'},
     'mou_deleted':{label:'MOU Deleted',color:'#DC2626',bg:'#FEE2E2'},
     'mou_note':{label:'MOU Note Added',color:'#64748B',bg:'#F1F5F9'},
+    'event_created':{label:'Event Created',color:'#059669',bg:'#D1FAE5'},
+    'event_updated':{label:'Event Updated',color:'#1D4ED8',bg:'#DBEAFE'},
+    'event_removed':{label:'Event Deleted',color:'#DC2626',bg:'#FEE2E2'},
+    'event_renamed':{label:'Event Renamed',color:'#D97706',bg:'#FEF3C7'},
   };
 
   const actionTypes=useMemo(()=>[...new Set(logs.map(l=>l.action))].sort(),[logs]);
@@ -2696,6 +2952,7 @@ const TABS=[
   {id:'overview',  label:'Overview',          icon:'📊'},
   {id:'fiscal',    label:'Fiscal Health',     icon:'📋'},
   {id:'payments',  label:'Partner Payments',  icon:'💳'},
+  {id:'events',    label:'Events',            icon:'📅'},
   {id:'mous',      label:'MOUs',              icon:'📝'},
   {id:'dataaudit', label:'Data & Audit',      icon:'📄'},
   {id:'log',       label:'Activity Log',      icon:'📋'},
@@ -2721,6 +2978,7 @@ function App(){
   const [accountGuide,setAccountGuide]=useState(DEFAULT_ACCOUNT_GUIDE);
   const [payments,setPayments]=useState([]);
   const [mous,setMous]=useState([]);
+  const [events,setEvents]=useState([]);
 
   const [activeTab,setActiveTab]=useState('overview');
   const [jumpToId,setJumpToId]=useState(null);
@@ -2770,8 +3028,9 @@ function App(){
     // Payments subscription (independent, doesn't block main load)
     const paymentsSub=_db.collection('payments').onSnapshot(s=>{setPayments(s.docs.map(d=>({...d.data(),id:d.id})));},e=>console.error('Payments:',e));
     const mousSub=_db.collection('mous').onSnapshot(s=>{setMous(s.docs.map(d=>({...d.data(),id:d.id})));},e=>console.error('MOUs:',e));
+    const eventsSub=_db.collection('events').onSnapshot(s=>{setEvents(s.docs.map(d=>({...d.data(),id:d.id})));},e=>console.error('Events:',e));
     const guideSub=_col('accountGuide').onSnapshot(s=>{setAccountGuide(s.exists&&s.data().items?s.data().items:DEFAULT_ACCOUNT_GUIDE);},e=>console.error('Guide:',e));
-    return()=>{subs.forEach(u=>u());paymentsSub();mousSub();guideSub();};
+    return()=>{subs.forEach(u=>u());paymentsSub();mousSub();eventsSub();guideSub();};
   },[user,roleLoading]);
 
   useEffect(()=>{
@@ -2892,7 +3151,8 @@ function App(){
         <div style={{flex:1,overflowY:'auto',padding:'24px'}}>
           {activeTab==='overview'  &&<OverviewTab    txns={transactions} todos={todos} setTodos={updTodos} auditTags={auditTags} userRole={userRole} payments={payments} teamMembers={teamMembers} currentUid={user.uid} onJumpToAllocation={jumpToAllocation} accountGuide={accountGuide} setAccountGuide={updAccountGuide}/>}
           {activeTab==='fiscal'    &&<FiscalHealthTab txns={transactions} amendments={amendments} setAmendments={updAmendments} initialView={fiscalView} onViewChange={setFiscalView}/>}
-          {activeTab==='payments'  &&<PartnerPaymentsTab payments={payments} userRole={userRole} txns={transactions} mous={mous}/>}
+          {activeTab==='payments'  &&<PartnerPaymentsTab payments={payments} userRole={userRole} txns={transactions} mous={mous} events={events}/>}
+          {activeTab==='events'    &&<EventsTab events={events} payments={payments} userRole={userRole}/>}
           {activeTab==='mous'      &&<MousTab mous={mous} payments={payments} userRole={userRole}/>}
           {activeTab==='dataaudit' &&<DataAuditTab   txns={transactions} enrichments={enrichments} setEnrichments={updEnrichments} auditTags={auditTags} setAuditTags={updTags} jumpToId={jumpToId} clearJump={()=>setJumpToId(null)} initialView={dataAuditView} onViewChange={setDataAuditView} onJumpToEnrich={jumpToEnrich} userRole={userRole}/>}
           {activeTab==='log'       &&<LogTab logs={activityLogs}/>}
