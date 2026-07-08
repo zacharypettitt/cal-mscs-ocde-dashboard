@@ -2421,6 +2421,7 @@ function EventForm({form,setForm,onSave,onCancel,saveLabel}){
 function EventsTab({events,payments,userRole}){
   const canManage=userRole==='director'||userRole==='admin_support';
   const [search,setSearch]=useState('');
+  const [sortBy,setSortBy]=useState('name'); // 'name'|'date'
   const [showAdd,setShowAdd]=useState(false);
   const [editId,setEditId]=useState(null);
   const [form,setForm]=useState({name:'',description:'',date:''});
@@ -2442,8 +2443,11 @@ function EventsTab({events,payments,userRole}){
   const filtered=useMemo(()=>{
     let r=events;
     if(search){const q=search.toLowerCase();r=r.filter(e=>(e.name||'').toLowerCase().includes(q)||(e.description||'').toLowerCase().includes(q));}
-    return[...r].sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-  },[events,search]);
+    const byName=(a,b)=>(a.name||'').localeCompare(b.name||'');
+    // Date sort: newest first; events without a date sort to the bottom, then by name.
+    const byDate=(a,b)=>{const da=a.date||'',db=b.date||'';if(!da&&!db)return byName(a,b);if(!da)return 1;if(!db)return -1;return db.localeCompare(da)||byName(a,b);};
+    return[...r].sort(sortBy==='date'?byDate:byName);
+  },[events,search,sortBy]);
 
   async function handleAdd(){
     setFormError('');
@@ -2515,6 +2519,7 @@ function EventsTab({events,payments,userRole}){
 
       <div style={{display:'flex',gap:'8px',flexWrap:'wrap',alignItems:'center'}}>
         <input placeholder="Search events..." value={search} onChange={e=>setSearch(e.target.value)} style={{...inp,flex:'2',minWidth:'200px'}}/>
+        <select value={sortBy} onChange={e=>setSortBy(e.target.value)} style={{...inp,flex:'1',minWidth:'150px'}} title="Sort events"><option value="name">Sort: Name (A–Z)</option><option value="date">Sort: Date (newest)</option></select>
         {canManage&&<button onClick={()=>{setShowAdd(true);setEditId(null);setFormError('');setForm({name:'',description:'',date:''});}} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontWeight:'600',cursor:'pointer',whiteSpace:'nowrap'}}>+ Add Event</button>}
       </div>
 
@@ -2542,37 +2547,50 @@ function EventsTab({events,payments,userRole}){
 
       {filtered.length===0&&<div style={{background:'white',border:'2px dashed #E2E8F0',borderRadius:'12px',padding:'40px',textAlign:'center'}}><div style={{fontSize:'32px',marginBottom:'8px'}}>📅</div><p style={{color:'#64748B',fontWeight:'500',margin:0}}>{events.length===0?'No events created yet.':'No events match your search.'}</p>{canManage&&events.length===0&&<p style={{color:'#94A3B8',fontSize:'13px',margin:'6px 0 0'}}>Click "+ Add Event" to create your first event.</p>}</div>}
 
-      <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
-        {filtered.map(e=>{
-          const isEditing=editId===e.id;
-          const count=countByName[(e.name||'').trim()]||0;
-          if(isEditing) return(
-            <div key={e.id} style={{background:'#EFF6FF',border:'2px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
-              <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>Editing: {e.name}</div>
-              {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
-              <EventForm form={form} setForm={setForm} onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes"/>
+      {filtered.length>0&&(()=>{
+        const th={padding:'8px 12px',fontSize:'11px',fontWeight:'700',color:'#64748B',textTransform:'uppercase',letterSpacing:'0.04em',textAlign:'left',background:'#F8FAFC',borderBottom:'1px solid #E2E8F0'};
+        const cell={padding:'9px 12px',borderBottom:'1px solid #F1F5F9',verticalAlign:'top'};
+        return(
+          <div style={{border:'1px solid #E2E8F0',borderRadius:'12px',overflow:'hidden'}}>
+            <div style={{overflowX:'auto'}}>
+              <table style={{width:'100%',borderCollapse:'collapse',minWidth:'640px'}}>
+                <thead><tr>
+                  <th style={th}>Event</th><th style={th}>Date</th><th style={th}>Payments</th><th style={th}>Description</th>{canManage&&<th style={{...th,width:'150px'}}></th>}
+                </tr></thead>
+                <tbody>
+                  {filtered.map(e=>{
+                    const isEditing=editId===e.id;
+                    const count=countByName[(e.name||'').trim()]||0;
+                    if(isEditing) return(
+                      <tr key={e.id}><td colSpan={canManage?5:4} style={{padding:0}}>
+                        <div style={{background:'#EFF6FF',border:'2px solid #BFDBFE',borderRadius:'12px',padding:'18px',margin:'8px'}}>
+                          <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>Editing: {e.name}</div>
+                          {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
+                          <EventForm form={form} setForm={setForm} onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes"/>
+                        </div>
+                      </td></tr>
+                    );
+                    return(
+                      <tr key={e.id}>
+                        <td style={{...cell,fontWeight:'700',color:'#1E293B',fontSize:'13px',whiteSpace:'nowrap'}}>{e.name}</td>
+                        <td style={{...cell,whiteSpace:'nowrap'}}>{e.date?<span style={{padding:'2px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#DBEAFE',color:'#1D4ED8'}}>📅 {e.date}</span>:<span style={{fontSize:'12px',color:'#CBD5E1'}}>—</span>}</td>
+                        <td style={{...cell,whiteSpace:'nowrap'}}><span style={{padding:'2px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:count>0?'#F0FDFA':'#F1F5F9',color:count>0?'#0F766E':'#94A3B8'}}>{count}</span></td>
+                        <td style={{...cell,fontSize:'12px',color:'#475569',lineHeight:'1.4'}}>{e.description||<span style={{color:'#CBD5E1'}}>—</span>}</td>
+                        {canManage&&(
+                          <td style={{...cell,whiteSpace:'nowrap',textAlign:'right'}}>
+                            <button onClick={()=>startEdit(e)} style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'7px',padding:'5px 11px',cursor:'pointer',color:'#1D4ED8',fontSize:'12px',fontWeight:'600',marginRight:'6px'}}>Edit</button>
+                            <button onClick={()=>handleDelete(e)} style={{background:'none',border:'1px solid #FECACA',borderRadius:'7px',padding:'5px 11px',cursor:'pointer',color:'#991B1B',fontSize:'12px'}}>Delete</button>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-          );
-          return(
-            <div key={e.id} style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',padding:'14px 16px',display:'flex',alignItems:'flex-start',gap:'14px'}}>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap',marginBottom:'4px'}}>
-                  <span style={{fontWeight:'700',color:'#1E293B',fontSize:'15px'}}>{e.name}</span>
-                  {e.date&&<span style={{padding:'2px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#DBEAFE',color:'#1D4ED8'}}>📅 {e.date}</span>}
-                  <span style={{padding:'2px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:count>0?'#F0FDFA':'#F1F5F9',color:count>0?'#0F766E':'#94A3B8'}}>{count} payment{count!==1?'s':''}</span>
-                </div>
-                {e.description&&<div style={{fontSize:'13px',color:'#475569',lineHeight:'1.5'}}>{e.description}</div>}
-              </div>
-              {canManage&&(
-                <div style={{display:'flex',gap:'8px',flexShrink:0}}>
-                  <button onClick={()=>startEdit(e)} style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'7px',padding:'6px 12px',cursor:'pointer',color:'#1D4ED8',fontSize:'12px',fontWeight:'600'}}>Edit</button>
-                  <button onClick={()=>handleDelete(e)} style={{background:'none',border:'1px solid #FECACA',borderRadius:'7px',padding:'6px 12px',cursor:'pointer',color:'#991B1B',fontSize:'12px'}}>Delete</button>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -2956,8 +2974,8 @@ function LogTab({logs}){
 const TABS=[
   {id:'overview',  label:'Overview',          icon:'📊'},
   {id:'fiscal',    label:'Fiscal Health',     icon:'📋'},
-  {id:'payments',  label:'Partner Payments',  icon:'💳'},
   {id:'events',    label:'Events',            icon:'📅'},
+  {id:'payments',  label:'Partner Payments',  icon:'💳'},
   {id:'mous',      label:'MOUs',              icon:'📝'},
   {id:'dataaudit', label:'Data & Audit',      icon:'📄'},
   {id:'log',       label:'Activity Log',      icon:'📋'},
