@@ -2397,6 +2397,27 @@ async function handleCoeReimbUpdate(p,newStatus){
 // event here rewrites the event field on every payment currently referencing
 // the old name, so the change propagates. Access mirrors Payments/MOUs:
 // everyone views, managers create/edit/delete.
+// ── Event Form (standalone — MUST be outside EventsTab) ───────────────────────
+// Defined inline inside EventsTab, this remounted on every keystroke (parent
+// re-renders on each setForm), stealing focus from the name/date inputs. Same
+// fix as PayForm: hoist it out and pass form/setForm as props.
+function EventForm({form,setForm,onSave,onCancel,saveLabel}){
+  const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'7px 10px',fontSize:'13px',width:'100%'};
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
+      <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:'10px'}}>
+        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Event Name *</label><input value={form.name} onChange={ev=>setForm(p=>({...p,name:ev.target.value}))} placeholder="e.g. Math CoP Spring 2026" style={inp}/></div>
+        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Date</label><input type="date" value={form.date} onChange={ev=>setForm(p=>({...p,date:ev.target.value}))} style={inp}/></div>
+      </div>
+      <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Description</label><textarea value={form.description} onChange={ev=>setForm(p=>({...p,description:ev.target.value}))} placeholder="What is this event or activity?" rows={2} style={{...inp,resize:'vertical'}}/></div>
+      <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
+        <button onClick={onCancel} style={{border:'1px solid #E2E8F0',background:'white',borderRadius:'8px',padding:'8px 16px',cursor:'pointer',color:'#64748B',fontSize:'13px'}}>Cancel</button>
+        <button onClick={onSave} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontWeight:'600',cursor:'pointer',fontSize:'13px'}}>{saveLabel}</button>
+      </div>
+    </div>
+  );
+}
+
 function EventsTab({events,payments,userRole}){
   const canManage=userRole==='director'||userRole==='admin_support';
   const [search,setSearch]=useState('');
@@ -2484,22 +2505,6 @@ function EventsTab({events,payments,userRole}){
 
   const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'7px 10px',fontSize:'13px',width:'100%'};
 
-  function EventForm({onSave,onCancel,saveLabel}){
-    return(
-      <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
-        <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:'10px'}}>
-          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Event Name *</label><input value={form.name} onChange={ev=>setForm(p=>({...p,name:ev.target.value}))} placeholder="e.g. Math CoP Spring 2026" style={inp}/></div>
-          <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Date</label><input type="date" value={form.date} onChange={ev=>setForm(p=>({...p,date:ev.target.value}))} style={inp}/></div>
-        </div>
-        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Description</label><textarea value={form.description} onChange={ev=>setForm(p=>({...p,description:ev.target.value}))} placeholder="What is this event or activity?" rows={2} style={{...inp,resize:'vertical'}}/></div>
-        <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
-          <button onClick={onCancel} style={{border:'1px solid #E2E8F0',background:'white',borderRadius:'8px',padding:'8px 16px',cursor:'pointer',color:'#64748B',fontSize:'13px'}}>Cancel</button>
-          <button onClick={onSave} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontWeight:'600',cursor:'pointer',fontSize:'13px'}}>{saveLabel}</button>
-        </div>
-      </div>
-    );
-  }
-
   return(
     <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
       <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'12px'}}>
@@ -2517,7 +2522,7 @@ function EventsTab({events,payments,userRole}){
         <div style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
           <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>New Event</div>
           {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
-          <EventForm onSave={handleAdd} onCancel={()=>setShowAdd(false)} saveLabel="Create Event"/>
+          <EventForm form={form} setForm={setForm} onSave={handleAdd} onCancel={()=>setShowAdd(false)} saveLabel="Create Event"/>
         </div>
       )}
 
@@ -2545,7 +2550,7 @@ function EventsTab({events,payments,userRole}){
             <div key={e.id} style={{background:'#EFF6FF',border:'2px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
               <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>Editing: {e.name}</div>
               {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
-              <EventForm onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes"/>
+              <EventForm form={form} setForm={setForm} onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes"/>
             </div>
           );
           return(
