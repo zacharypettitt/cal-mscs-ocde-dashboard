@@ -58,19 +58,28 @@ function saveEventHistory(action,snapshot){
   }).catch(function(e){console.warn('Event history error:',e);});
 }
 
-// ── DEFERRED HARDENING NOTES (future session — agreed 2026-07) ────────────────
+// ── DEFERRED HARDENING NOTES (updated 2026-07 — "D-lite" shipped) ─────────────
 // D2 (concurrency): auditTags + enrichments are single shared blob docs
 //   rewritten wholesale on every change; simultaneous edits by two users can
 //   silently clobber each other (enrichment 1.5s debounce widens the window).
-//   Plan: migrate to per-transaction docs in a `txnMeta/{txnId}` collection
-//   (separate from /transactions so Full Replace never destroys audit work).
-//   Requires: one-time migration of blob data, new listeners, rules update,
-//   count verification before/after. Move todos to per-doc while at it.
-// D3 (scaling): same blobs approach Firestore's 1MB doc limit as enrichment
-//   text grows across 1,600+ txns. Fully resolved by the D2 migration.
-// D4 (retention): eventHistory snapshots currently cover payment edit/delete
-//   only. After D2, extend to to-do deletions and audit-tag removals
-//   (destructive ops only — not every enrichment keystroke).
+//   ACCEPTED RISK for now: only two managers write, onSnapshot keeps their
+//   browsers synced in near-real-time, so exposure is ~seconds of overlap.
+//   Working convention: director + admin support avoid doing Enrichment &
+//   Audit edits at the same moment.
+// D3 (scaling): blobs have a hard 1MB Firestore per-document ceiling.
+//   SHIPPED: permanent BlobSizeMonitor gauge on the Data & Audit tab —
+//   green <500KB, amber 500–700KB, red >700KB — so growth is visible long
+//   before writes would start failing.
+// D4 (retention): SHIPPED: to-do deletions now snapshot to eventHistory via
+//   saveEventHistory (destructive ops only, never per-keystroke). Payment and
+//   MOU edit/delete snapshots already existed.
+// FULL MIGRATION (deferred, plan preserved): move enrichments/tags to
+//   per-transaction `txnMeta/{txnId}` docs (kept separate from /transactions
+//   so Full Replace never destroys audit work) and todos to per-doc.
+//   TRIGGERS to actually do it: the size gauge goes red, OR more than two
+//   people start writing regularly. Requires: one-time blob migration with
+//   count verification, new listeners, per-txn debounce, and new rules
+//   blocks for txnMeta + todos.
 const FS = {
   payment:       (id,data) => _db.collection('payments').doc(id).set(data).catch(e=>{console.error(e);throw e;}),
   paymentUpdate: (id,data) => _db.collection('payments').doc(id).update(data).catch(e=>{console.error(e);throw e;}),
@@ -250,9 +259,12 @@ const BUDGET={
   ]},
 };
 
-// Displayed "Total contract (5 yrs)" figure is kept as a fixed, cited number
+// Displayed "Total contract (4 yrs)" figure is kept as a fixed, cited number
 // (matches the executed grant agreement) rather than auto-derived, per
 // decision to keep it hardcoded but validated against BUDGET on every render.
+// Note: the funding document nominally calls this a 5-year grant, but "Year 1"
+// was only 6/1/23–6/30/23 (a warm-up month); implementation is 4 fiscal years
+// (FY23/24–FY26/27), which is what FY_LIST and all displays reflect.
 const CONTRACT_TOTAL_DISPLAY=502280;
 const BUDGET_TOTAL_CONTRACT=Object.values(BUDGET).reduce((s,b)=>s+(b.contract||0),0);
 const CONTRACT_TOTAL_MATCHES=Math.abs(CONTRACT_TOTAL_DISPLAY-BUDGET_TOTAL_CONTRACT)<0.01;
@@ -347,7 +359,8 @@ const AUDIT_TAGS=[
   {id:"unknown",label:"Unknown",color:"#6B7280",bg:"#F3F4F6"},
 ];
 // Tags no longer offered; any of these still stored on a transaction get
-// stripped on load (see sanitizeAuditTags in App) so the data stays clean.
+// stripped on load (inline cleanup in App's auditTags onSnapshot listener,
+// which persists the cleaned map back once) so the data stays clean.
 const RETIRED_TAG_IDS=["pending_reimb","follow_up","awaiting_doc","disputed","informational"];
 
 const TODO_CATS={
@@ -469,6 +482,8 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMember
   }
   function del(id){
     const t=todos.find(x=>x.id===id);
+    // D4 retention: keep an immutable snapshot of the deleted to-do
+    if(t) saveEventHistory('todo_deleted',{...t,eventName:t.title});
     setTodos(ts=>ts.filter(x=>x.id!==id));
     if(t) logActivity('todo_deleted',`Deleted to-do: "${t.title}"`,{todoId:id,category:t.cat});
   }
@@ -488,7 +503,7 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMember
 
   const activeFY=activeGrantFY();
   const byFY={};
-  txns.forEach(t=>{if(!byFY[t.fy])byFY[t.fy]={exp1:0,exp2:0,rev2:0};if(t.account==='0110029')byFY[t.fy].exp1+=t.amt;if(t.account==='0110238')byFY[t.fy].exp2+=t.amt;if(t.account==='0110237'&&t.sacs_group==='8xxx')byFY[t.fy].rev2+=t.amt;});
+  txns.forEach(t=>{if(!byFY[t.fy])byFY[t.fy]={exp1:0,exp2:0,rev2:0};if(t.account==='0110029'||t.account==='0110030')byFY[t.fy].exp1+=t.amt;if(t.account==='0110238')byFY[t.fy].exp2+=t.amt;if(t.account==='0110237'&&t.sacs_group==='8xxx')byFY[t.fy].rev2+=t.amt;});
   const fy=byFY[activeFY]||{};
   const totalExp1=Object.values(byFY).reduce((s,f)=>s+(f.exp1||0),0);
 
@@ -678,7 +693,7 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,teamMember
         </div>}
         <div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',padding:'14px'}}>
           <div style={{fontSize:'10px',fontWeight:'700',color:'#64748B',letterSpacing:'0.06em',marginBottom:'10px'}}>PRIMARY ALLOCATION — {activeFY}</div>
-          {[['Total contract (5 yrs)',fmt(CONTRACT_TOTAL_DISPLAY)],['Spent to date',fmt(totalExp1)],[`${activeFY} budget available`,fmt(curContract)],[`${activeFY} spent`,fmt(curSpentThisYear)],['Unspent this year',fmt(curUnspent)]].map(([l,v],i)=>(
+          {[['Total contract (4 yrs)',fmt(CONTRACT_TOTAL_DISPLAY)],['Spent to date',fmt(totalExp1)],[`${activeFY} budget available`,fmt(curContract)],[`${activeFY} spent`,fmt(curSpentThisYear)],['Unspent this year',fmt(curUnspent)]].map(([l,v],i)=>(
             <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'3px 0',borderTop:i>0?'1px solid #F8FAFC':'none',fontSize:'12px'}}><span style={{color:'#64748B'}}>{l}</span><span style={{fontWeight:i===4?'700':'500',color:i===4?(curUnspent<0?'#DC2626':'#D97706'):'#1E293B'}}>{v}</span></div>
           ))}
           {CONTRACT_TOTAL_MATCHES?(
@@ -1446,7 +1461,7 @@ function CarryoverTab({txns}){
       </div>
       <div style={{background:'#FFFBEB',border:'1px solid #FDE68A',borderRadius:'12px',padding:'18px'}}>
         <h3 style={{fontSize:'14px',fontWeight:'700',color:'#92400E',margin:'0 0 4px'}}>COE Reimbursement Net Position — tracked separately</h3>
-        <p style={{fontSize:'12px',color:'#78350F',margin:'0 0 14px'}}>Pass-through funds from partner reimbursement agreements (0110237 revenue vs. 0110238 expense), cumulative since program start. This is intentionally kept separate from the primary allocation carryover above — it isn't CDE contract money and shouldn't be blended into "available for Year 5" figures.</p>
+        <p style={{fontSize:'12px',color:'#78350F',margin:'0 0 14px'}}>Pass-through funds from partner reimbursement agreements (0110237 revenue vs. 0110238 expense), cumulative since program start. This is intentionally kept separate from the primary allocation carryover above — it isn't CDE contract money and shouldn't be blended into "available for the final year" figures.</p>
         <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'12px'}}>
           <KpiCard label="Cumulative Revenue (0110237)" value={fmt(coeNet.rev)} accent="#D97706"/>
           <KpiCard label="Cumulative Expenses (0110238)" value={fmt(coeNet.exp)} accent="#D97706"/>
@@ -1827,6 +1842,52 @@ function FiscalHealthTab({txns,amendments,setAmendments,initialView,onViewChange
   );
 }
 
+// ── Shared-doc size monitor (D3 guard) ────────────────────────────────────────
+// The enrichments and auditTags maps each live in a single Firestore document
+// with a hard 1MB (1,048,576-byte) per-document ceiling — at the limit, writes
+// fail and audit work stops saving. This strip is a PERMANENT gauge (not a
+// warning that appears only when there's a problem) so growth is visible long
+// before that. Bytes are a close proxy — UTF-8 JSON of the stored map — not
+// Firestore's exact internal accounting, which also counts field paths and the
+// doc name (a few extra bytes at most here). If a bar goes red, schedule the
+// txnMeta migration (see DEFERRED HARDENING NOTES near the top of this file).
+const BLOB_DOC_LIMIT=1048576;
+function blobBytes(obj){
+  try{return new Blob([JSON.stringify({data:obj||{}})]).size;}
+  catch(err){return JSON.stringify({data:obj||{}}).length;}
+}
+function BlobSizeMonitor({enrichments,auditTags}){
+  const rows=useMemo(()=>[
+    {label:'Enrichments doc',bytes:blobBytes(enrichments)},
+    {label:'Audit tags doc',bytes:blobBytes(auditTags)},
+  ],[enrichments,auditTags]);
+  const worstBytes=Math.max(...rows.map(r=>r.bytes));
+  const redAlert=worstBytes>=700*1024;
+  return(
+    <div style={{background:'white',border:'1px solid '+(redAlert?'#FECACA':'#E2E8F0'),borderRadius:'10px',padding:'10px 14px',display:'flex',gap:'16px',alignItems:'center',flexWrap:'wrap'}}>
+      <span style={{fontSize:'10px',fontWeight:'700',color:'#64748B',letterSpacing:'0.06em',whiteSpace:'nowrap'}}>SHARED-DOC STORAGE</span>
+      {rows.map(r=>{
+        const p=r.bytes/BLOB_DOC_LIMIT;
+        const color=r.bytes>=700*1024?'#DC2626':r.bytes>=500*1024?'#D97706':'#059669';
+        return(
+          <div key={r.label} style={{display:'flex',alignItems:'center',gap:'8px',flex:1,minWidth:'230px'}}>
+            <span style={{fontSize:'12px',color:'#334155',fontWeight:'600',whiteSpace:'nowrap'}}>{r.label}</span>
+            <div style={{flex:1,height:'8px',background:'#F1F5F9',borderRadius:'4px',overflow:'hidden',minWidth:'70px'}} title={r.bytes.toLocaleString()+' bytes of '+BLOB_DOC_LIMIT.toLocaleString()}>
+              <div style={{height:'100%',width:Math.max(0.5,Math.min(100,p*100))+'%',background:color,borderRadius:'4px'}}/>
+            </div>
+            <span style={{fontSize:'11px',color,fontWeight:'700',whiteSpace:'nowrap'}}>{(r.bytes/1024).toFixed(1)} KB · {(p*100).toFixed(1)}%</span>
+          </div>
+        );
+      })}
+      {redAlert?(
+        <span style={{fontSize:'11px',color:'#DC2626',fontWeight:'700'}}>⚠ Approaching the 1MB Firestore document limit — time to schedule the txnMeta migration.</span>
+      ):(
+        <span style={{fontSize:'11px',color:'#94A3B8',whiteSpace:'nowrap'}}>of 1MB Firestore doc limit</span>
+      )}
+    </div>
+  );
+}
+
 // ── Data & Audit Tab (Ledger + Enrichment + Summary) ──────────────────────────
 function DataAuditTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,jumpToId,clearJump,initialView,onViewChange,onJumpToEnrich,userRole}){
   const [view,setView]=useState(initialView||'ledger');
@@ -1840,6 +1901,7 @@ function DataAuditTab({txns,enrichments,setEnrichments,auditTags,setAuditTags,ju
         {tabBtn('enrichment','Enrichment & Audit')}
         {tabBtn('audit','Audit Summary')}
       </div>
+      <BlobSizeMonitor enrichments={enrichments} auditTags={auditTags}/>
       {view==='ledger'&&<LedgerTab txns={txns} enrichments={enrichments} auditTags={auditTags} onJumpToEnrich={onJumpToEnrich}/>}
       {view==='enrichment'&&<EnrichmentTab txns={txns} enrichments={enrichments} setEnrichments={setEnrichments} auditTags={auditTags} setAuditTags={setAuditTags} jumpToId={jumpToId} clearJump={clearJump} userRole={userRole}/>}
       {view==='audit'&&<AuditSummaryTab txns={txns} enrichments={enrichments} auditTags={auditTags}/>}
@@ -2005,6 +2067,7 @@ function PartnerPaymentsTab({payments,userRole,txns,mous,events}){
   const [filterEvent,setFilterEvent]=useState('');
   const [search,setSearch]=useState('');
   const [groupSort,setGroupSort]=useState('alpha'); // 'alpha'|'org'|'individual'|'status'
+  const [groupSortDir,setGroupSortDir]=useState('asc'); // 'asc'|'desc'
   // Events typed via "+ New event" that have no payment yet — kept so they
   // appear in the dropdown until a payment is assigned to them.
   const [pendingEvents,setPendingEvents]=useState([]);
@@ -2055,13 +2118,14 @@ function PartnerPaymentsTab({payments,userRole,txns,mous,events}){
       individual:(a,b)=>indivOf(a).localeCompare(indivOf(b)),
       status:(a,b)=>{const rank=s=>normPayStatus(s)==='unpaid'?0:1;return rank(a.status)-rank(b.status)||(a.recipient||'').localeCompare(b.recipient||'');},
     };
-    const cmp=sorters[groupSort]||sorters.alpha;
+    const baseCmp=sorters[groupSort]||sorters.alpha;
+    const cmp=groupSortDir==='desc'?(a,b)=>-baseCmp(a,b):baseCmp;
     Object.keys(byEvent).forEach(k=>byEvent[k].sort(cmp));
     const namedKeys=Object.keys(byEvent).filter(k=>k!=='__unassigned__').sort((a,b)=>a.localeCompare(b));
     const groups=namedKeys.map(k=>({key:k,label:k,items:byEvent[k]}));
     if(byEvent['__unassigned__']) groups.push({key:'__unassigned__',label:'Unassigned / No Event',items:byEvent['__unassigned__']});
     return groups;
-  },[filtered,groupSort]);
+  },[filtered,groupSort,groupSortDir]);
   // Groups start collapsed by default. We track which groups the user has
   // explicitly opened; everything else renders collapsed. `openedGroups`
   // holds keys the user toggled — combined with the default via isCollapsed().
@@ -2193,7 +2257,8 @@ async function handleCoeReimbUpdate(p,newStatus){
         <select value={filterType} onChange={e=>setFilterType(e.target.value)} style={{...inp,flex:1,minWidth:'110px'}}><option value="">All Types</option>{PAY_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select>
         <select value={filterFY} onChange={e=>setFilterFY(e.target.value)} style={{...inp,flex:1,minWidth:'100px'}}><option value="">All Years</option>{FY_LIST.map(f=><option key={f} value={f}>{f}</option>)}</select>
         <select value={filterEvent} onChange={e=>setFilterEvent(e.target.value)} style={{...inp,flex:1,minWidth:'150px'}}><option value="">All Events</option>{eventList.map(ev=><option key={ev} value={ev}>{ev}</option>)}<option value="__unassigned__">Unassigned / No Event</option></select>
-        <select value={groupSort} onChange={e=>setGroupSort(e.target.value)} style={{...inp,flex:1,minWidth:'150px'}} title="Sort within each event group"><option value="alpha">Sort: Recipient (A–Z)</option><option value="org">Sort: Organization</option><option value="individual">Sort: Individual</option><option value="status">Sort: Payment Status</option></select>
+        <select value={groupSort} onChange={e=>setGroupSort(e.target.value)} style={{...inp,flex:1,minWidth:'140px'}} title="Sort within each event group"><option value="alpha">Sort: Recipient</option><option value="org">Sort: Organization</option><option value="individual">Sort: Individual</option><option value="status">Sort: Status</option></select>
+        <button onClick={()=>setGroupSortDir(d=>d==='asc'?'desc':'asc')} title={groupSortDir==='asc'?'Ascending':'Descending'} style={{border:'1px solid #E2E8F0',background:'white',borderRadius:'8px',padding:'8px 12px',fontSize:'12px',fontWeight:'600',color:'#334155',cursor:'pointer',whiteSpace:'nowrap'}}>{groupSort==='status'?(groupSortDir==='asc'?'↑ Unpaid first':'↓ Paid first'):(groupSortDir==='asc'?'↑ A–Z':'↓ Z–A')}</button>
         {canManage&&<button onClick={()=>{setShowAdd(true);setEditId(null);setFormError('');setForm({...EMPTY_PAY,fyYear:activeGrantFY()});}} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontWeight:'600',cursor:'pointer',whiteSpace:'nowrap'}}>+ Add Payment</button>}
       </div>
 
@@ -2447,6 +2512,7 @@ function EventsTab({events,payments,userRole}){
   const canManage=userRole==='director'||userRole==='admin_support';
   const [search,setSearch]=useState('');
   const [sortBy,setSortBy]=useState('name'); // 'name'|'date'
+  const [sortDir,setSortDir]=useState('asc'); // 'asc'|'desc'
   const [showAdd,setShowAdd]=useState(false);
   const [editId,setEditId]=useState(null);
   const [form,setForm]=useState({name:'',description:'',date:'',type:''});
@@ -2477,7 +2543,9 @@ function EventsTab({events,payments,userRole}){
   function addType(t){setPendingTypes(prev=>prev.includes(t)?prev:[...prev,t]);}
 
   const byName=(a,b)=>(a.name||'').localeCompare(b.name||'');
-  const byDate=(a,b)=>{const da=a.date||'',db=b.date||'';if(!da&&!db)return byName(a,b);if(!da)return 1;if(!db)return -1;return db.localeCompare(da)||byName(a,b);};
+  // Ascending date compare: oldest first. Direction wrapper flips it; undated
+  // events are forced to the bottom in both directions (handled in the memo).
+  const byDateAsc=(a,b)=>(a.date||'').localeCompare(b.date||'')||byName(a,b);
   const filtered=useMemo(()=>{
     let r=events;
     if(search){const q=search.toLowerCase();r=r.filter(e=>(e.name||'').toLowerCase().includes(q)||(e.description||'').toLowerCase().includes(q)||(e.type||'').toLowerCase().includes(q));}
@@ -2488,7 +2556,14 @@ function EventsTab({events,payments,userRole}){
   // alphabetical; an "Uncategorized / No Type" group sits last (mirrors the
   // Partner Payments "Unassigned" group).
   const grouped=useMemo(()=>{
-    const cmp=sortBy==='date'?byDate:byName;
+    const dir=sortDir==='desc'?-1:1;
+    let cmp;
+    if(sortBy==='date'){
+      // Undated always last; among dated, flip with direction (asc = oldest first).
+      cmp=(a,b)=>{const da=a.date||'',db=b.date||'';if(!da&&!db)return byName(a,b);if(!da)return 1;if(!db)return -1;return dir*byDateAsc(a,b);};
+    }else{
+      cmp=(a,b)=>dir*byName(a,b);
+    }
     const byType={};
     filtered.forEach(e=>{const key=(e.type||'').trim()||'__untyped__';(byType[key]=byType[key]||[]).push(e);});
     Object.keys(byType).forEach(k=>byType[k].sort(cmp));
@@ -2496,7 +2571,7 @@ function EventsTab({events,payments,userRole}){
     const groups=namedKeys.map(k=>({key:k,label:k,items:byType[k]}));
     if(byType['__untyped__']) groups.push({key:'__untyped__',label:'Uncategorized / No Type',items:byType['__untyped__']});
     return groups;
-  },[filtered,sortBy]);
+  },[filtered,sortBy,sortDir]);
 
   async function handleAdd(){
     setFormError('');
@@ -2570,7 +2645,8 @@ function EventsTab({events,payments,userRole}){
 
       <div style={{display:'flex',gap:'8px',flexWrap:'wrap',alignItems:'center'}}>
         <input placeholder="Search events..." value={search} onChange={e=>setSearch(e.target.value)} style={{...inp,flex:'2',minWidth:'200px'}}/>
-        <select value={sortBy} onChange={e=>setSortBy(e.target.value)} style={{...inp,flex:'1',minWidth:'150px'}} title="Sort events"><option value="name">Sort: Name (A–Z)</option><option value="date">Sort: Date (newest)</option></select>
+        <select value={sortBy} onChange={e=>setSortBy(e.target.value)} style={{...inp,flex:'1',minWidth:'130px'}} title="Sort events"><option value="name">Sort: Name</option><option value="date">Sort: Date</option></select>
+        <button onClick={()=>setSortDir(d=>d==='asc'?'desc':'asc')} title={sortDir==='asc'?'Ascending':'Descending'} style={{border:'1px solid #E2E8F0',background:'white',borderRadius:'8px',padding:'7px 12px',fontSize:'12px',fontWeight:'600',color:'#334155',cursor:'pointer',whiteSpace:'nowrap'}}>{sortBy==='date'?(sortDir==='asc'?'↑ Oldest':'↓ Newest'):(sortDir==='asc'?'↑ A–Z':'↓ Z–A')}</button>
         {canManage&&<button onClick={()=>{setShowAdd(true);setEditId(null);setFormError('');setForm({name:'',description:'',date:'',type:''});}} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontWeight:'600',cursor:'pointer',whiteSpace:'nowrap'}}>+ Add Event</button>}
       </div>
 
