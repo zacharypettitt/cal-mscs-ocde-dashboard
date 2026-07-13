@@ -3277,6 +3277,11 @@ function App(){
   const [showTeamPanel,setShowTeamPanel]=useState(false);
   const [activityLogs,setActivityLogs]=useState([]);
   const [teamMembers,setTeamMembers]=useState([]);
+  // "View As" — lets the real Project Lead temporarily preview the dashboard
+  // as Admin Support or Team Member would see it (UI-only; Firestore rules
+  // still enforce the real signed-in role, so this never grants or removes
+  // actual write access — it just changes what renders). null = no override.
+  const [viewAsRole,setViewAsRole]=useState(null);
 
   const [transactions,setTransactions]=useState([]);
   const [txnLoading,setTxnLoading]=useState(true);
@@ -3388,9 +3393,12 @@ function App(){
     setFiscalView('allocation');
   }
 
-  const allowedTabIds=ROLE_TAB_ACCESS[userRole];
+  // Only a real director can activate a preview; effectiveRole is what every
+  // permission check and child component below actually sees while active.
+  const effectiveRole=(userRole==='director'&&viewAsRole)?viewAsRole:userRole;
+  const allowedTabIds=ROLE_TAB_ACCESS[effectiveRole];
   const visibleTabs=allowedTabIds?TABS.filter(t=>allowedTabIds.includes(t.id)):TABS;
-  useEffect(()=>{if(visibleTabs.length&&!visibleTabs.find(t=>t.id===activeTab))setActiveTab(visibleTabs[0].id);},[userRole]);
+  useEffect(()=>{if(visibleTabs.length&&!visibleTabs.find(t=>t.id===activeTab))setActiveTab(visibleTabs[0].id);},[effectiveRole]);
 
   const untaggedCount=useMemo(()=>transactions.filter(t=>!(auditTags[t.id]&&auditTags[t.id].length>0)).length,[transactions,auditTags]);
   // Header range derives from data actually loaded, so it never goes stale
@@ -3401,7 +3409,7 @@ function App(){
     return fys.length===1?expand(fys[0]):`${expand(fys[0])} through ${expand(fys[fys.length-1])}`;
   },[transactions]);
   const untaggedLabel=untaggedCount>=1000?(untaggedCount/1000).toFixed(1)+'k':String(untaggedCount);
-  const canManage=userRole==='director'||userRole==='admin_support';
+  const canManage=effectiveRole==='director'||effectiveRole==='admin_support';
   const activeTabInfo=visibleTabs.find(t=>t.id===activeTab)||visibleTabs[0]||TABS[0];
 
   if(authLoading)return(<div style={{minHeight:'100vh',background:'#1A6B7A',display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{color:'#93C5FD'}}>Loading...</div></div>);
@@ -3415,7 +3423,7 @@ function App(){
   return(
     <div style={{display:'flex',height:'100vh',background:'#F1F5F9',fontFamily:'system-ui,-apple-system,sans-serif',overflow:'hidden'}}>
       {showUpload&&<UploadModal onClose={()=>setShowUpload(false)} onImport={handleImport} existingCount={transactions.length} existingTxns={transactions}/>}
-      {showTeamPanel&&<TeamPanel currentUid={user.uid} currentRole={userRole} onClose={()=>setShowTeamPanel(false)}/>}
+      {showTeamPanel&&<TeamPanel currentUid={user.uid} currentRole={effectiveRole} onClose={()=>setShowTeamPanel(false)}/>}
 
       <div style={{width:'220px',flexShrink:0,display:'flex',flexDirection:'column',background:'#1A6B7A'}}>
         <div style={{padding:'14px 14px 12px',borderBottom:'1px solid rgba(255,255,255,0.15)',display:'flex',alignItems:'center',gap:'12px'}}>
@@ -3437,11 +3445,22 @@ function App(){
           ))}
         </nav>
         <div style={{padding:'12px 14px',borderTop:'1px solid rgba(255,255,255,0.1)',display:'flex',flexDirection:'column',gap:'6px'}}>
+          {userRole==='director'&&(
+            <div style={{marginBottom:'2px'}}>
+              <label style={{display:'block',fontSize:'10px',fontWeight:'700',color:'rgba(255,255,255,0.5)',letterSpacing:'0.06em',marginBottom:'4px',paddingLeft:'2px'}}>VIEW AS</label>
+              <select value={viewAsRole||''} onChange={e=>setViewAsRole(e.target.value||null)}
+                style={{width:'100%',background:viewAsRole?'#7C3AED':'rgba(255,255,255,0.08)',border:'1px solid '+(viewAsRole?'#7C3AED':'rgba(255,255,255,0.15)'),borderRadius:'8px',padding:'8px 10px',fontSize:'12px',fontWeight:'600',color:'white',cursor:'pointer'}}>
+                <option value="" style={{color:'#1E293B'}}>My View (Project Lead)</option>
+                <option value="admin_support" style={{color:'#1E293B'}}>Admin Support</option>
+                <option value="team_member" style={{color:'#1E293B'}}>Team Member</option>
+              </select>
+            </div>
+          )}
           {canManage&&<button onClick={()=>setShowUpload(true)} style={{display:'flex',alignItems:'center',gap:'8px',background:'rgba(42,171,130,0.15)',border:'1px solid rgba(42,171,130,0.3)',cursor:'pointer',color:'rgba(255,255,255,0.85)',padding:'9px 12px',borderRadius:'8px',fontSize:'12px',fontWeight:'600'}} onMouseOver={e=>e.currentTarget.style.background='rgba(255,255,255,0.18)'} onMouseOut={e=>e.currentTarget.style.background='rgba(255,255,255,0.1)'}>Import Data</button>}
           {canManage&&<button onClick={()=>setShowTeamPanel(true)} style={{display:'flex',alignItems:'center',gap:'8px',background:'rgba(255,255,255,0.06)',border:'none',cursor:'pointer',color:'#93C5FD',padding:'9px 12px',borderRadius:'8px',fontSize:'12px'}} onMouseOver={e=>e.currentTarget.style.background='rgba(255,255,255,0.14)'} onMouseOut={e=>e.currentTarget.style.background='rgba(255,255,255,0.06)'}>Manage Team</button>}
           <div style={{display:'flex',alignItems:'center',gap:'8px',padding:'4px 2px'}}>
             {user.photoURL&&<img src={user.photoURL} alt="" style={{width:'26px',height:'26px',borderRadius:'50%',flexShrink:0}}/>}
-            <div style={{flex:1,minWidth:0}}><div style={{fontSize:'11px',fontWeight:'600',color:'#E2E8F0',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{user.displayName||user.email}</div><div style={{fontSize:'10px',color:'rgba(147,197,253,0.6)'}}>{ROLES[userRole]||'Team Member'}</div></div>
+            <div style={{flex:1,minWidth:0}}><div style={{fontSize:'11px',fontWeight:'600',color:'#E2E8F0',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{user.displayName||user.email}</div><div style={{fontSize:'10px',color:viewAsRole?'#C4B5FD':'rgba(147,197,253,0.6)'}}>{viewAsRole?`${ROLES.director} · viewing as ${ROLES[viewAsRole]}`:(ROLES[userRole]||'Team Member')}</div></div>
             <button onClick={()=>_auth.signOut()} style={{background:'none',border:'1px solid rgba(255,255,255,0.15)',borderRadius:'5px',cursor:'pointer',color:'rgba(147,197,253,0.6)',padding:'3px 7px',fontSize:'10px',flexShrink:0}} onMouseOver={e=>{e.currentTarget.style.color='white';e.currentTarget.style.borderColor='rgba(255,255,255,0.4)';}} onMouseOut={e=>{e.currentTarget.style.color='rgba(147,197,253,0.6)';e.currentTarget.style.borderColor='rgba(255,255,255,0.15)';}}>Sign out</button>
           </div>
           <div style={{fontSize:'10px',color:'rgba(147,197,253,0.35)',paddingTop:'2px'}}>{transactions.length.toLocaleString()} txns · live sync 🟢</div>
@@ -3449,6 +3468,14 @@ function App(){
       </div>
 
       <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+        {viewAsRole&&userRole==='director'&&(
+          <div style={{background:'#7C3AED',color:'white',padding:'10px 24px',display:'flex',alignItems:'center',gap:'10px',flexShrink:0}}>
+            <span style={{fontSize:'16px'}}>👁️</span>
+            <span style={{fontSize:'13px',fontWeight:'700'}}>Previewing as {ROLES[viewAsRole]}</span>
+            <span style={{fontSize:'12px',opacity:.85}}>— you're seeing exactly what this role sees. Your actual permissions as {ROLES.director} are unchanged.</span>
+            <button onClick={()=>setViewAsRole(null)} style={{marginLeft:'auto',background:'white',color:'#7C3AED',border:'none',borderRadius:'7px',padding:'6px 14px',fontSize:'12px',fontWeight:'700',cursor:'pointer',whiteSpace:'nowrap'}}>Exit Preview</button>
+          </div>
+        )}
         <div style={{background:'white',borderBottom:'1px solid #E2E8F0',padding:'14px 24px',display:'flex',alignItems:'center',gap:'10px'}}>
           <span style={{fontSize:'18px'}}>{activeTabInfo.icon}</span>
           <h1 style={{fontSize:'15px',fontWeight:'700',color:'#1E293B',margin:0}}>{activeTabInfo.label}</h1>
@@ -3458,12 +3485,12 @@ function App(){
           </div>
         </div>
         <div style={{flex:1,overflowY:'auto',padding:'24px'}}>
-          {activeTab==='overview'  &&<OverviewTab    txns={transactions} todos={todos} setTodos={updTodos} auditTags={auditTags} userRole={userRole} payments={payments} coeInvoices={coeInvoices} teamMembers={teamMembers} currentUid={user.uid} onJumpToAllocation={jumpToAllocation} accountGuide={accountGuide} setAccountGuide={updAccountGuide}/>}
+          {activeTab==='overview'  &&<OverviewTab    txns={transactions} todos={todos} setTodos={updTodos} auditTags={auditTags} userRole={effectiveRole} payments={payments} coeInvoices={coeInvoices} teamMembers={teamMembers} currentUid={user.uid} onJumpToAllocation={jumpToAllocation} accountGuide={accountGuide} setAccountGuide={updAccountGuide}/>}
           {activeTab==='fiscal'    &&<FiscalHealthTab txns={transactions} amendments={amendments} setAmendments={updAmendments} initialView={fiscalView} onViewChange={setFiscalView}/>}
-          {activeTab==='payments'  &&<PartnerPaymentsTab payments={payments} userRole={userRole} txns={transactions} events={events}/>}
-          {activeTab==='coeinvoices'&&<CoeInvoicesTab invoices={coeInvoices} userRole={userRole} txns={transactions} payments={payments} events={events}/>}
-          {activeTab==='events'    &&<EventsTab events={events} payments={payments} userRole={userRole}/>}
-          {activeTab==='dataaudit' &&<DataAuditTab   txns={transactions} enrichments={enrichments} setEnrichments={updEnrichments} auditTags={auditTags} setAuditTags={updTags} jumpToId={jumpToId} clearJump={()=>setJumpToId(null)} initialView={dataAuditView} onViewChange={setDataAuditView} onJumpToEnrich={jumpToEnrich} userRole={userRole}/>}
+          {activeTab==='payments'  &&<PartnerPaymentsTab payments={payments} userRole={effectiveRole} txns={transactions} events={events}/>}
+          {activeTab==='coeinvoices'&&<CoeInvoicesTab invoices={coeInvoices} userRole={effectiveRole} txns={transactions} payments={payments} events={events}/>}
+          {activeTab==='events'    &&<EventsTab events={events} payments={payments} userRole={effectiveRole}/>}
+          {activeTab==='dataaudit' &&<DataAuditTab   txns={transactions} enrichments={enrichments} setEnrichments={updEnrichments} auditTags={auditTags} setAuditTags={updTags} jumpToId={jumpToId} clearJump={()=>setJumpToId(null)} initialView={dataAuditView} onViewChange={setDataAuditView} onJumpToEnrich={jumpToEnrich} userRole={effectiveRole}/>}
           {activeTab==='log'       &&<LogTab logs={activityLogs}/>}
         </div>
       </div>
