@@ -86,9 +86,6 @@ const FS = {
   payment:       (id,data) => _db.collection('payments').doc(id).set(data).catch(e=>{console.error(e);throw e;}),
   paymentUpdate: (id,data) => _db.collection('payments').doc(id).update(data).catch(e=>{console.error(e);throw e;}),
   paymentDelete: (id)      => _db.collection('payments').doc(id).delete().catch(e=>{console.error(e);throw e;}),
-  mou:           (id,data) => _db.collection('mous').doc(id).set(data).catch(e=>{console.error(e);throw e;}),
-  mouUpdate:     (id,data) => _db.collection('mous').doc(id).update(data).catch(e=>{console.error(e);throw e;}),
-  mouDelete:     (id)      => _db.collection('mous').doc(id).delete().catch(e=>{console.error(e);throw e;}),
   event:         (id,data) => _db.collection('events').doc(id).set(data).catch(e=>{console.error(e);throw e;}),
   eventUpdate:   (id,data) => _db.collection('events').doc(id).update(data).catch(e=>{console.error(e);throw e;}),
   eventDelete:   (id)      => _db.collection('events').doc(id).delete().catch(e=>{console.error(e);throw e;}),
@@ -207,8 +204,8 @@ function activeGrantFY(){const c=currentFY();const last=FY_LIST[FY_LIST.length-1
 function grantEnded(){return currentFY()>FY_LIST[FY_LIST.length-1];}
 
 // Role system
-const ROLES={director:'Director',admin_support:'Admin Support',team_member:'Team Member'};
-const ROLE_TAB_ACCESS={director:null,admin_support:['overview','fiscal','payments','coeinvoices','events','mous','dataaudit'],team_member:['overview','fiscal','payments','coeinvoices','events','mous']};
+const ROLES={director:'Project Lead',admin_support:'Admin Support',team_member:'Team Member'};
+const ROLE_TAB_ACCESS={director:null,admin_support:['overview','fiscal','payments','coeinvoices','events','dataaudit'],team_member:['overview','fiscal','payments','coeinvoices','events']};
 
 
 // ── Account labels ────────────────────────────────────────────────────────────
@@ -459,7 +456,6 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,coeInvoice
   const [assigneeFilter,setAssigneeFilter]=useState('all'); // 'all' | 'me' | 'unassigned'
   const [form,setForm]=useState({title:'',body:'',cat:'general',priority:'medium',assignedTo:'',dueDate:''});
   const [editForm,setEditForm]=useState({});
-  const unverifiedCount=useMemo(()=>txns.filter(t=>{const tags=auditTags[t.id]||[];return!tags.includes('verified');}).length,[txns,auditTags]);
 
   const memberByUid=useMemo(()=>{const m={};(teamMembers||[]).forEach(u=>{m[u.uid]=u;});return m;},[teamMembers]);
   function assigneeName(uid){if(!uid)return null;const u=memberByUid[uid];return u?(u.displayName||u.email):'Unknown user';}
@@ -522,21 +518,11 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,coeInvoice
   // COE Reimbursement net position — tracked separately, not blended into primary carryover
   const coeNet=useMemo(()=>computeCoeNetPosition(txns),[txns]);
 
-  const readyAmt=PAYMENTS.filter(p=>p.status==='ready').reduce((s,p)=>s+p.amt,0);
-  const readyCount=PAYMENTS.filter(p=>p.status==='ready').length;
-
   // Live cross-check against Allocation Schedule's recorded statuses — surfaces
   // here too so a stale status doesn't go unnoticed just because nobody happened
-  // to click into Fiscal Health after an import.
+  // to click into Financial Summary after an import.
   const reconciled=useMemo(()=>computePaymentReconciliation(txns),[txns]);
   const paymentMismatchCount=reconciled.filter(p=>p.mismatch).length;
-
-  // Owed by COE — now sourced from the coeInvoices collection (split out from
-  // Partner Payments 2026-07). "Owed" = invoices not yet fully reimbursed
-  // (Not Yet Invoiced or Invoiced — awaiting reimbursement).
-  const owedInvoices=useMemo(()=>(coeInvoices||[]).filter(i=>(i.status||'not_invoiced')!=='received'),[coeInvoices]);
-  const owedAmt=owedInvoices.reduce((s,i)=>s+(parseFloat(i.amount)||0),0);
-  const owedCount=owedInvoices.length;
 
   const ended=grantEnded();
   const timeline=FY_LIST.map(f=>{
@@ -563,7 +549,7 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,coeInvoice
       <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:'10px'}}>
           <div><h2 style={{fontSize:'18px',fontWeight:'700',color:'#0F172A',margin:0}}>What needs your attention</h2>
-            <p style={{fontSize:'13px',color:'#64748B',margin:'4px 0 0'}}>{active.length+(unverifiedCount>0&&assigneeFilter==='all'?1:0)} open · {done.length} completed</p></div>
+            <p style={{fontSize:'13px',color:'#64748B',margin:'4px 0 0'}}>{active.length} open · {done.length} completed</p></div>
           {canEdit&&<button onClick={()=>setShowAdd(v=>!v)} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontWeight:'600',cursor:'pointer'}}>+ Add item</button>}
         </div>
 
@@ -593,15 +579,7 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,coeInvoice
             </div>
           </div>
         )}
-        {unverifiedCount>0&&assigneeFilter==='all'&&(
-          <div style={{background:'#FFFBEB',borderRadius:'12px',border:'2px solid #FDE68A',padding:'14px 16px',display:'flex',gap:'14px',alignItems:'flex-start'}}>
-            <span style={{fontSize:'20px',flexShrink:0}}>🔍</span>
-            <div style={{flex:1}}><div style={{display:'flex',alignItems:'center',gap:'8px'}}><span style={{fontWeight:'700',color:'#92400E',fontSize:'14px'}}>{unverifiedCount.toLocaleString()} transactions need review</span><span style={{padding:'2px 8px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#FEF3C7',color:'#B45309'}}>Auto</span></div>
-              <p style={{fontSize:'13px',color:'#78350F',margin:'5px 0 0',lineHeight:'1.5'}}>Open <strong>Data & Audit</strong>, filter by "Not Yet Enriched", and mark each transaction <strong>Verified</strong>. Clears automatically.</p>
-            </div>
-          </div>
-        )}
-        {active.length===0&&!(unverifiedCount>0&&assigneeFilter==='all')&&!showAdd&&(
+        {active.length===0&&!showAdd&&(
           <div style={{background:'white',borderRadius:'12px',border:'2px dashed #E2E8F0',padding:'40px',textAlign:'center'}}>
             <div style={{fontSize:'28px',marginBottom:'8px'}}>✅</div>
             <p style={{color:'#64748B',fontWeight:'500',margin:0}}>{assigneeFilter==='me'?'Nothing assigned to you right now.':assigneeFilter==='unassigned'?'Everything has an owner.':'All caught up!'}</p>
@@ -680,11 +658,6 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,coeInvoice
           <div style={{fontSize:'12px',fontWeight:'700',color:'#475569'}}>Grant period ended June 30, 2027</div>
           <div style={{fontSize:'11px',color:'#64748B',marginTop:'3px'}}>Figures below reflect the final grant year ({activeFY}). Closeout reporting may still be in progress.</div>
         </div>}
-        {readyAmt>0&&<div style={{background:'#1D4ED8',borderRadius:'12px',padding:'16px',color:'white'}}>
-          <div style={{fontSize:'10px',fontWeight:'700',opacity:.8,letterSpacing:'0.06em',marginBottom:'4px'}}>READY TO INVOICE — PRIMARY ALLOCATION</div>
-          <div style={{fontSize:'22px',fontWeight:'700'}}>{fmt(readyAmt)}</div>
-          <div style={{fontSize:'11px',opacity:.75,marginTop:'3px'}}>{readyCount} payment{readyCount!==1?'s':''} · spending triggers met</div>
-        </div>}
         {paymentMismatchCount>0&&(
           <button onClick={onJumpToAllocation} style={{background:'#FFFBEB',border:'2px solid #FDE68A',borderRadius:'12px',padding:'14px 16px',textAlign:'left',cursor:'pointer',display:'flex',gap:'10px',alignItems:'flex-start'}}>
             <span style={{fontSize:'18px',flexShrink:0}}>⚠️</span>
@@ -694,11 +667,6 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,coeInvoice
             </div>
           </button>
         )}
-        {owedAmt>0&&<div style={{background:'#92400E',borderRadius:'12px',padding:'16px',color:'white'}}>
-          <div style={{fontSize:'10px',fontWeight:'700',opacity:.85,letterSpacing:'0.06em',marginBottom:'4px'}}>OWED BY COE — PARTNER REIMBURSEMENTS</div>
-          <div style={{fontSize:'22px',fontWeight:'700'}}>{fmt(owedAmt)}</div>
-          <div style={{fontSize:'11px',opacity:.8,marginTop:'3px'}}>{owedCount} invoice{owedCount!==1?'s':''} not yet reimbursed</div>
-        </div>}
         <div style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',padding:'14px'}}>
           <div style={{fontSize:'10px',fontWeight:'700',color:'#64748B',letterSpacing:'0.06em',marginBottom:'10px'}}>PRIMARY ALLOCATION — {activeFY}</div>
           {[['Total contract (4 yrs)',fmt(CONTRACT_TOTAL_DISPLAY)],['Spent to date',fmt(totalExp1)],[`${activeFY} budget available`,fmt(curContract)],[`${activeFY} spent`,fmt(curSpentThisYear)],['Unspent this year',fmt(curUnspent)]].map(([l,v],i)=>(
@@ -1731,7 +1699,7 @@ function TeamPanel({currentUid,currentRole,onClose}){
         </div>
         <div style={{padding:'20px 22px'}}>
           <div style={{background:'#F8FAFC',borderRadius:'10px',padding:'12px',marginBottom:'16px',fontSize:'12px',color:'#64748B'}}>
-            <strong>Role permissions:</strong> Director: all tabs · Admin Support: all except Activity Log · Team Member: Overview, Fiscal Health, Partner Payments, MOUs (view + notes)
+            <strong>Role permissions:</strong> Project Lead: all tabs · Admin Support: all except Activity Log · Team Member: Overview, Financial Summary, Partner Payments, COE Invoices, Events (view + notes)
           </div>
           {loading?<div style={{textAlign:'center',padding:'20px',color:'#94A3B8'}}>Loading team members...</div>:
             <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
@@ -1830,7 +1798,7 @@ function AllocationView({txns}){
   );
 }
 
-// ── Fiscal Health Tab (Year Detail + Multi-Year + Allocation Schedule) ─────────
+// ── Financial Summary Tab (Year Detail + Multi-Year + Allocation Schedule) ────
 function FiscalHealthTab({txns,amendments,setAmendments,initialView,onViewChange}){
   const [view,setView]=useState(initialView||'year');
   useEffect(()=>{if(initialView&&initialView!==view)setView(initialView);},[initialView]);
@@ -1932,12 +1900,12 @@ const STATUS_ORDER=['unpaid','paid'];
 function normPayStatus(s){return s==='paid'?'paid':'unpaid';}
 const PAY_TYPES=['Stipend','Travel','Services','Materials','Other'];
 const RECIP_TYPES=['LEA','COE','Individual','Vendor','Other'];
-const EMPTY_PAY={recipient:'',organization:'',contactName:'',recipientType:'Individual',paymentType:'Services',description:'',amount:'',fundingSource:'primary',fyYear:'',event:'',agreementRef:'',mouId:'',expectedDate:'',txnId:'',paidDate:'',paidAmount:''};
+const EMPTY_PAY={recipient:'',organization:'',contactName:'',recipientType:'Individual',paymentType:'Services',description:'',amount:'',fundingSource:'primary',fyYear:'',event:'',agreementRef:'',expectedDate:'',txnId:'',paidDate:'',paidAmount:''};
 
 // ── Payment Form (standalone component — MUST be outside PartnerPaymentsTab) ──
 // Extracting this fixes a React bug where inline component definitions inside a
 // parent that re-renders on every keystroke get remounted, losing input focus.
-function PayForm({form,setForm,onSave,onCancel,saveLabel,txns,mous,events,onAddEvent}){
+function PayForm({form,setForm,onSave,onCancel,saveLabel,txns,events,onAddEvent}){
   const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'7px 10px',fontSize:'13px',width:'100%'};
   // 0110238 transactions for the selected fiscal year, newest first. If the
   // form already references a txn outside the current FY filter, keep it in
@@ -2003,7 +1971,7 @@ function PayForm({form,setForm,onSave,onCancel,saveLabel,txns,mous,events,onAddE
         <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Expected Amount *</label><input type="number" value={form.amount} onChange={e=>setForm(p=>({...p,amount:e.target.value}))} placeholder="0.00" style={inp}/></div>
         <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Funding Source</label><select value={form.fundingSource} onChange={e=>setForm(p=>({...p,fundingSource:e.target.value}))} style={inp}><option value="primary">Primary Allocation</option><option value="coe">COE Reimbursement</option></select></div>
         <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Fiscal Year</label><select value={form.fyYear} onChange={e=>setForm(p=>({...p,fyYear:e.target.value}))} style={inp}>{FY_LIST.map(f=><option key={f} value={f}>{f}</option>)}</select></div>
-        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Agreement Ref #</label><input value={form.agreementRef} onChange={e=>setForm(p=>({...p,agreementRef:e.target.value}))} placeholder="MOU #, PO #, etc." style={inp}/></div>
+        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Agreement Ref #</label><input value={form.agreementRef} onChange={e=>setForm(p=>({...p,agreementRef:e.target.value}))} placeholder="PO #, contract #, etc." style={inp}/></div>
       </div>
       {/* Event / Activity — group payments by the activity they belong to.
           Pick an existing event or type a new one inline (adds to the shared list). */}
@@ -2030,13 +1998,6 @@ function PayForm({form,setForm,onSave,onCancel,saveLabel,txns,mous,events,onAddE
           </div>
         );
       })()}
-      {/* MOU cross-link: pick a recorded MOU; Agreement Ref stays free text for non-MOU payments */}
-      <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Linked MOU (optional)</label>
-        <select value={form.mouId||''} onChange={e=>setForm(p=>({...p,mouId:e.target.value}))} style={inp}>
-          <option value="">— No MOU linked —</option>
-          {(mous||[]).map(m=><option key={m.id} value={m.id}>{m.partner} — {(m.title||'').slice(0,50)}{m.refNum?' ('+m.refNum+')':''}</option>)}
-        </select>
-      </div>
       {/* Ledger match: pick the actual 0110238 transaction; date + amount autofill */}
       <div style={{background:'#ECFDF5',border:'1px solid #A7F3D0',borderRadius:'10px',padding:'12px'}}>
         <label style={{display:'block',fontSize:'11px',color:'#047857',fontWeight:'700',marginBottom:'4px'}}>Match Ledger Transaction — {matchAccountLabel}, {form.fyYear||'select FY'}</label>
@@ -2068,7 +2029,7 @@ const COE_REIMB_STATUSES={
 const COE_INV_STATUS_ORDER=['not_invoiced','invoiced','received'];
 const COE_INV_EMPTY={partner:'',event:'',fyYear:'',description:'',amount:'',agreementRef:'',linkedPaymentId:'',txnId:'',invoicedDate:'',receivedDate:'',receivedAmount:''};
 
-function PartnerPaymentsTab({payments,userRole,txns,mous,events}){
+function PartnerPaymentsTab({payments,userRole,txns,events}){
   const canManage=userRole==='director'||userRole==='admin_support';
   const [filterSource,setFilterSource]=useState('');
   const [filterStatus,setFilterStatus]=useState('');
@@ -2186,7 +2147,7 @@ function PartnerPaymentsTab({payments,userRole,txns,mous,events}){
     try{
       const before=payments.find(x=>x.id===editId);
       if(before) await saveEventHistory('updated',{...before,eventName:before.recipient});
-      const upd={recipient:displayRecipient,organization:form.organization||'',contactName:form.contactName||'',recipientType:form.recipientType,paymentType:form.paymentType,description:form.description,amount:parseFloat(form.amount)||0,fundingSource:form.fundingSource,fyYear:form.fyYear,event:(form.event||'').trim(),agreementRef:form.agreementRef,mouId:form.mouId||'',expectedDate:form.expectedDate,txnId:form.txnId||'',paidDate:form.paidDate||'',paidAmount:parseFloat(form.paidAmount)||0};
+      const upd={recipient:displayRecipient,organization:form.organization||'',contactName:form.contactName||'',recipientType:form.recipientType,paymentType:form.paymentType,description:form.description,amount:parseFloat(form.amount)||0,fundingSource:form.fundingSource,fyYear:form.fyYear,event:(form.event||'').trim(),agreementRef:form.agreementRef,expectedDate:form.expectedDate,txnId:form.txnId||'',paidDate:form.paidDate||'',paidAmount:parseFloat(form.paidAmount)||0};
       // Matching a ledger transaction implies the payment was made
       if(form.txnId&&before&&normPayStatus(before.status)!=='paid'){
         upd.status='paid';
@@ -2225,7 +2186,7 @@ function PartnerPaymentsTab({payments,userRole,txns,mous,events}){
     logActivity('payment_note',`Added note to "${p.recipient}"`,{id:p.id});
     setNoteText('');setNoteInputId(null);
   }
-  function startEdit(p){const wasOrg=p.recipientType==='LEA'||p.recipientType==='COE';setEditId(p.id);setForm({recipient:wasOrg?'':(p.recipient||''),organization:p.organization||(wasOrg?(p.recipient||''):''),contactName:p.contactName||'',recipientType:p.recipientType||'Individual',paymentType:p.paymentType||'Services',description:p.description||'',amount:String(p.amount||''),fundingSource:p.fundingSource||'primary',fyYear:p.fyYear||activeGrantFY(),event:p.event||'',agreementRef:p.agreementRef||'',mouId:p.mouId||'',expectedDate:p.expectedDate||'',txnId:p.txnId||'',paidDate:p.paidDate||'',paidAmount:String(p.paidAmount||'')});}
+  function startEdit(p){const wasOrg=p.recipientType==='LEA'||p.recipientType==='COE';setEditId(p.id);setForm({recipient:wasOrg?'':(p.recipient||''),organization:p.organization||(wasOrg?(p.recipient||''):''),contactName:p.contactName||'',recipientType:p.recipientType||'Individual',paymentType:p.paymentType||'Services',description:p.description||'',amount:String(p.amount||''),fundingSource:p.fundingSource||'primary',fyYear:p.fyYear||activeGrantFY(),event:p.event||'',agreementRef:p.agreementRef||'',expectedDate:p.expectedDate||'',txnId:p.txnId||'',paidDate:p.paidDate||'',paidAmount:String(p.paidAmount||'')});}
 
   const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'7px 10px',fontSize:'13px',width:'100%'};
   const srcLabel={primary:'Primary Allocation',coe:'COE Reimbursement'};
@@ -2277,7 +2238,7 @@ function PartnerPaymentsTab({payments,userRole,txns,mous,events}){
         <div style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
           <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>New Payment Record</div>
           {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
-          <PayForm form={form} setForm={setForm} onSave={handleAdd} onCancel={()=>setShowAdd(false)} saveLabel="Create Payment" txns={txns} mous={mous} events={eventList} onAddEvent={addEventName}/>
+          <PayForm form={form} setForm={setForm} onSave={handleAdd} onCancel={()=>setShowAdd(false)} saveLabel="Create Payment" txns={txns} events={eventList} onAddEvent={addEventName}/>
         </div>
       )}
 
@@ -2300,7 +2261,7 @@ function PartnerPaymentsTab({payments,userRole,txns,mous,events}){
             <div style={{background:'#EFF6FF',border:'2px solid #BFDBFE',borderRadius:'12px',padding:'18px',margin:'8px'}}>
               <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>Editing: {p.recipient}</div>
               {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
-              <PayForm form={form} setForm={setForm} onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes" txns={txns} mous={mous} events={eventList} onAddEvent={addEventName}/>
+              <PayForm form={form} setForm={setForm} onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes" txns={txns} events={eventList} onAddEvent={addEventName}/>
             </div>
             </td></tr>
           );
@@ -2331,7 +2292,6 @@ function PartnerPaymentsTab({payments,userRole,txns,mous,events}){
                       <span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#1A6B7A',color:'white'}}>{p.fyYear}</span>
                       <span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#F3F4F6',color:'#374151'}}>{p.recipientType}</span>
                       {(p.notes||[]).length>0&&<span style={{fontSize:'11px',color:'#1D4ED8',fontWeight:'600'}}>💬 {p.notes.length} note{p.notes.length!==1?'s':''}</span>}
-                      {p.mouId&&(()=>{const m=(mous||[]).find(x=>x.id===p.mouId);return m?<span style={{fontSize:'11px',color:'#6D28D9',fontWeight:'600'}}>📝 MOU: {m.partner}</span>:null;})()}
                     </div>
                   <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'10px',background:'#F8FAFC',borderRadius:'8px',padding:'12px'}}>
                     {[['Agreement Ref',p.agreementRef||'—'],['Expected Date',p.expectedDate||'—'],['Paid Date',p.paidDate||'—'],['Ledger Match',matchedTxn?matchedTxn.date+' · '+fmt(matchedTxn.amt):(p.txnId||'—')]].map(([l,v])=>(
@@ -2484,7 +2444,7 @@ function CoeInvoiceForm({form,setForm,onSave,onCancel,saveLabel,txns,payments,ev
       <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Description / Purpose *</label><textarea value={form.description} onChange={e=>setForm(p=>({...p,description:e.target.value}))} placeholder="What is being invoiced to the COE for reimbursement?" rows={2} style={{...inp,resize:'none'}}/></div>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'10px'}}>
         <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Invoice Amount *</label><input type="number" value={form.amount} onChange={e=>setForm(p=>({...p,amount:e.target.value}))} placeholder="0.00" style={inp}/></div>
-        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Agreement Ref #</label><input value={form.agreementRef} onChange={e=>setForm(p=>({...p,agreementRef:e.target.value}))} placeholder="MOU #, PO #, etc." style={inp}/></div>
+        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Agreement Ref #</label><input value={form.agreementRef} onChange={e=>setForm(p=>({...p,agreementRef:e.target.value}))} placeholder="PO #, contract #, etc." style={inp}/></div>
         <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Date Invoiced</label><input type="date" value={form.invoicedDate} onChange={e=>setForm(p=>({...p,invoicedDate:e.target.value}))} style={inp}/></div>
       </div>
       {/* Event / Activity — shared dropdown with Events + Partner Payments */}
@@ -2872,7 +2832,7 @@ function CoeInvoicesTab({invoices,userRole,txns,payments,events}){
 // are the source of truth for the Partner Payments "Event / Activity" dropdown.
 // Payments link to events BY NAME (link-by-name, agreed 2026-07): renaming an
 // event here rewrites the event field on every payment currently referencing
-// the old name, so the change propagates. Access mirrors Payments/MOUs:
+// the old name, so the change propagates. Access mirrors Payments/COE Invoices:
 // everyone views, managers create/edit/delete.
 // ── Event Form (standalone — MUST be outside EventsTab) ───────────────────────
 // Defined inline inside EventsTab, this remounted on every keystroke (parent
@@ -3160,251 +3120,7 @@ function EventsTab({events,payments,userRole}){
   );
 }
 
-// ── MOUs Tab ───────────────────────────────────────────────────────────────────
-// Records Memorandums of Understanding with partner COEs/districts. One-time
-// agreements (no expiration tracking by design). Access mirrors Partner
-// Payments: everyone views, Team Members add notes only, managers create/edit/
-// delete. Cross-linking: an MOU can point at the Primary Grant Allocation or a
-// specific Partner Payment; payments can independently point at an MOU
-// (payment.mouId) and show up here via reverse lookup.
-const MOU_PARTNER_TYPES=['COE','District','Other'];
-const MOU_EMPTY={partner:'',partnerType:'COE',title:'',refNum:'',fyYear:'',amount:'',signedDate:'',docLink:'',linkType:'none',linkedPaymentId:''};
-const MOU_TYPE_COLOR={COE:{bg:'#FEF3C7',c:'#92400E'},District:{bg:'#E0F2FE',c:'#0369A1'},Other:{bg:'#F3F4F6',c:'#374151'}};
-
-function MouForm({form,setForm,onSave,onCancel,saveLabel,payments}){
-  const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'7px 10px',fontSize:'13px',width:'100%'};
-  const payOpts=useMemo(()=>[...(payments||[])].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||'')),[payments]);
-  return(
-    <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
-      <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr',gap:'10px'}}>
-        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Partner Organization *</label><input value={form.partner} onChange={e=>setForm(p=>({...p,partner:e.target.value}))} placeholder="e.g. San Joaquin COE, Saddleback Valley USD" style={inp}/></div>
-        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Partner Type</label><select value={form.partnerType} onChange={e=>setForm(p=>({...p,partnerType:e.target.value}))} style={inp}>{MOU_PARTNER_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
-        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Fiscal Year</label><select value={form.fyYear} onChange={e=>setForm(p=>({...p,fyYear:e.target.value}))} style={inp}>{FY_LIST.map(f=><option key={f} value={f}>{f}</option>)}</select></div>
-      </div>
-      <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Title / Purpose *</label><textarea value={form.title} onChange={e=>setForm(p=>({...p,title:e.target.value}))} placeholder="What does this MOU cover?" rows={2} style={{...inp,resize:'none'}}/></div>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:'10px'}}>
-        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Reference #</label><input value={form.refNum} onChange={e=>setForm(p=>({...p,refNum:e.target.value}))} placeholder="MOU #, contract #" style={inp}/></div>
-        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Amount (optional)</label><input type="number" value={form.amount} onChange={e=>setForm(p=>({...p,amount:e.target.value}))} placeholder="0.00" style={inp}/></div>
-        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Date Signed</label><input type="date" value={form.signedDate} onChange={e=>setForm(p=>({...p,signedDate:e.target.value}))} style={inp}/></div>
-        <div><label style={{display:'block',fontSize:'11px',color:'#64748B',fontWeight:'600',marginBottom:'3px'}}>Document Link</label><input value={form.docLink} onChange={e=>setForm(p=>({...p,docLink:e.target.value}))} placeholder="https:// (Drive/SharePoint)" style={inp}/></div>
-      </div>
-      {/* Funding cross-link */}
-      <div style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'10px',padding:'12px'}}>
-        <label style={{display:'block',fontSize:'11px',color:'#1D4ED8',fontWeight:'700',marginBottom:'6px'}}>Linked Funding (optional)</label>
-        <div style={{display:'grid',gridTemplateColumns:form.linkType==='payment'?'1fr 2fr':'1fr',gap:'10px'}}>
-          <select value={form.linkType} onChange={e=>setForm(p=>({...p,linkType:e.target.value,linkedPaymentId:e.target.value==='payment'?p.linkedPaymentId:''}))} style={inp}>
-            <option value="none">Not linked</option>
-            <option value="primary">Primary Grant Allocation</option>
-            <option value="payment">Specific Partner Payment</option>
-          </select>
-          {form.linkType==='payment'&&(
-            <select value={form.linkedPaymentId} onChange={e=>setForm(p=>({...p,linkedPaymentId:e.target.value}))} style={inp}>
-              <option value="">Select a payment...</option>
-              {payOpts.map(p=><option key={p.id} value={p.id}>{p.recipient} · {fmt(parseFloat(p.amount)||0)} · {p.fyYear}</option>)}
-            </select>
-          )}
-        </div>
-      </div>
-      <div style={{display:'flex',gap:'8px',justifyContent:'flex-end',paddingTop:'4px'}}>
-        <button onClick={onCancel} style={{border:'1px solid #E2E8F0',background:'white',borderRadius:'8px',padding:'8px 16px',cursor:'pointer',color:'#64748B',fontSize:'13px'}}>Cancel</button>
-        <button onClick={onSave} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontWeight:'600',cursor:'pointer',fontSize:'13px'}}>{saveLabel}</button>
-      </div>
-    </div>
-  );
-}
-
-function MousTab({mous,payments,userRole}){
-  const canManage=userRole==='director'||userRole==='admin_support';
-  const [search,setSearch]=useState('');
-  const [filterType,setFilterType]=useState('');
-  const [filterFY,setFilterFY]=useState('');
-  const [expandedId,setExpandedId]=useState(null);
-  const [showAdd,setShowAdd]=useState(false);
-  const [editId,setEditId]=useState(null);
-  const [noteInputId,setNoteInputId]=useState(null);
-  const [noteText,setNoteText]=useState('');
-  const [form,setForm]=useState({...MOU_EMPTY,fyYear:activeGrantFY()});
-  const [formError,setFormError]=useState('');
-
-  const filtered=useMemo(()=>{
-    let r=mous;
-    if(search){const q=search.toLowerCase();r=r.filter(m=>(m.partner||'').toLowerCase().includes(q)||(m.title||'').toLowerCase().includes(q)||(m.refNum||'').toLowerCase().includes(q));}
-    if(filterType) r=r.filter(m=>m.partnerType===filterType);
-    if(filterFY) r=r.filter(m=>m.fyYear===filterFY);
-    return[...r].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
-  },[mous,search,filterType,filterFY]);
-
-  const totalValue=mous.reduce((s,m)=>s+(parseFloat(m.amount)||0),0);
-  const linkedCount=mous.filter(m=>m.linkType&&m.linkType!=='none').length;
-
-  async function handleAdd(){
-    setFormError('');
-    if(!form.partner.trim()||!form.title.trim()){setFormError('Partner organization and title are required.');return;}
-    const u=_auth.currentUser;if(!u){setFormError('You are not signed in.');return;}
-    const id='m'+Date.now();const now=new Date().toISOString().slice(0,10);
-    try{
-      await FS.mou(id,{...form,id,amount:parseFloat(form.amount)||0,notes:[],createdAt:now,createdBy:u.displayName||u.email,createdByEmail:u.email});
-      logActivity('mou_added',`Added MOU: "${form.title}" with ${form.partner}`,{partnerType:form.partnerType,fy:form.fyYear,linkType:form.linkType});
-      setShowAdd(false);setForm({...MOU_EMPTY,fyYear:activeGrantFY()});
-    }catch(err){
-      setFormError('Could not save MOU: '+(err&&err.message?err.message:'unknown error')+'. This is usually a permissions issue — confirm your role in Manage Team.');
-    }
-  }
-  async function handleUpdate(){
-    setFormError('');
-    if(!form.partner.trim()||!form.title.trim()){setFormError('Partner organization and title are required.');return;}
-    try{
-      const before=mous.find(x=>x.id===editId);
-      if(before) await saveEventHistory('updated',{...before,eventName:before.title});
-      await FS.mouUpdate(editId,{partner:form.partner,partnerType:form.partnerType,title:form.title,refNum:form.refNum,fyYear:form.fyYear,amount:parseFloat(form.amount)||0,signedDate:form.signedDate,docLink:form.docLink,linkType:form.linkType,linkedPaymentId:form.linkType==='payment'?form.linkedPaymentId:''});
-      logActivity('mou_edited',`Edited MOU: "${form.title}"`,{id:editId});
-      setEditId(null);
-    }catch(err){
-      setFormError('Could not save changes: '+(err&&err.message?err.message:'unknown error')+'. This is usually a permissions issue — confirm your role in Manage Team.');
-    }
-  }
-  async function handleDelete(m){
-    if(!window.confirm(`Delete MOU "${m.title}"? This cannot be undone — a snapshot will be kept in the retention log.`)) return;
-    await saveEventHistory('deleted',{...m,eventName:m.title});
-    await FS.mouDelete(m.id);
-    logActivity('mou_deleted',`Deleted MOU: "${m.title}" (${m.partner})`,{id:m.id});
-  }
-  async function handleAddNote(m){
-    if(!noteText.trim()) return;
-    const u=_auth.currentUser;if(!u) return;
-    const note={id:'n'+Date.now(),text:noteText.trim(),author:u.displayName||u.email,authorEmail:u.email,authorPhoto:u.photoURL||null,createdAt:new Date().toISOString().slice(0,10)};
-    await FS.mouUpdate(m.id,{notes:[...(m.notes||[]),note]});
-    logActivity('mou_note',`Added note to MOU "${m.title}"`,{id:m.id});
-    setNoteText('');setNoteInputId(null);
-  }
-  function startEdit(m){setEditId(m.id);setForm({partner:m.partner||'',partnerType:m.partnerType||'COE',title:m.title||'',refNum:m.refNum||'',fyYear:m.fyYear||activeGrantFY(),amount:String(m.amount||''),signedDate:m.signedDate||'',docLink:m.docLink||'',linkType:m.linkType||'none',linkedPaymentId:m.linkedPaymentId||''});}
-
-  const inp={border:'1px solid #E2E8F0',borderRadius:'8px',padding:'7px 10px',fontSize:'13px',width:'100%'};
-
-  return(
-    <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'12px'}}>
-        <KpiCard label="Total MOUs" value={mous.length} sub={linkedCount+' linked to funding'} accent="#64748B"/>
-        <KpiCard label="Total Value" value={fmt(totalValue)} sub="where amounts recorded" accent="#1A6B7A"/>
-        <KpiCard label="Partners" value={[...new Set(mous.map(m=>m.partner).filter(Boolean))].length} sub="unique organizations" accent="#2AAB82"/>
-      </div>
-
-      <div style={{display:'flex',gap:'8px',flexWrap:'wrap',alignItems:'center'}}>
-        <input placeholder="Search partner, title, or reference #..." value={search} onChange={e=>setSearch(e.target.value)} style={{...inp,flex:'2',minWidth:'200px'}}/>
-        <select value={filterType} onChange={e=>setFilterType(e.target.value)} style={{...inp,flex:1,minWidth:'120px'}}><option value="">All Partner Types</option>{MOU_PARTNER_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select>
-        <select value={filterFY} onChange={e=>setFilterFY(e.target.value)} style={{...inp,flex:1,minWidth:'100px'}}><option value="">All Years</option>{FY_LIST.map(f=><option key={f} value={f}>{f}</option>)}</select>
-        {canManage&&<button onClick={()=>{setShowAdd(true);setEditId(null);setFormError('');setForm({...MOU_EMPTY,fyYear:activeGrantFY()});}} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'8px',padding:'8px 16px',fontSize:'13px',fontWeight:'600',cursor:'pointer',whiteSpace:'nowrap'}}>+ Add MOU</button>}
-      </div>
-
-      {showAdd&&canManage&&(
-        <div style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
-          <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>New MOU Record</div>
-          {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
-          <MouForm form={form} setForm={setForm} onSave={handleAdd} onCancel={()=>setShowAdd(false)} saveLabel="Create MOU" payments={payments}/>
-        </div>
-      )}
-
-      {filtered.length===0&&<div style={{background:'white',border:'2px dashed #E2E8F0',borderRadius:'12px',padding:'40px',textAlign:'center'}}><div style={{fontSize:'32px',marginBottom:'8px'}}>📝</div><p style={{color:'#64748B',fontWeight:'500',margin:0}}>{mous.length===0?'No MOUs recorded yet.':'No MOUs match your filters.'}</p>{canManage&&mous.length===0&&<p style={{color:'#94A3B8',fontSize:'13px',margin:'6px 0 0'}}>Click "+ Add MOU" to record your first agreement.</p>}</div>}
-
-      <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
-        {filtered.map(m=>{
-          const tc=MOU_TYPE_COLOR[m.partnerType]||MOU_TYPE_COLOR.Other;
-          const isExpanded=expandedId===m.id;
-          const isEditing=editId===m.id;
-          const linkedPayment=m.linkType==='payment'&&m.linkedPaymentId?(payments||[]).find(p=>p.id===m.linkedPaymentId):null;
-          const referencingPayments=(payments||[]).filter(p=>p.mouId===m.id);
-
-          if(isEditing) return(
-            <div key={m.id} style={{background:'#EFF6FF',border:'2px solid #BFDBFE',borderRadius:'12px',padding:'18px'}}>
-              <div style={{fontWeight:'700',color:'#1D4ED8',fontSize:'14px',marginBottom:'14px'}}>Editing: {m.title}</div>
-              {formError&&<div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:'#991B1B',marginBottom:'12px'}}>{formError}</div>}
-              <MouForm form={form} setForm={setForm} onSave={handleUpdate} onCancel={()=>setEditId(null)} saveLabel="Save Changes" payments={payments}/>
-            </div>
-          );
-
-          return(
-            <div key={m.id} style={{background:'white',borderRadius:'12px',border:'1px solid #E2E8F0',overflow:'hidden'}}>
-              <div style={{display:'flex',alignItems:'flex-start',gap:'14px',padding:'14px 16px',cursor:'pointer'}} onClick={()=>setExpandedId(isExpanded?null:m.id)}>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{display:'flex',alignItems:'center',gap:'7px',flexWrap:'wrap',marginBottom:'6px'}}>
-                    <span style={{fontWeight:'700',color:'#1E293B',fontSize:'15px'}}>{m.partner}</span>
-                    <span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:tc.bg,color:tc.c}}>{m.partnerType}</span>
-                    <span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#1A6B7A',color:'white'}}>{m.fyYear}</span>
-                    {m.linkType==='primary'&&<span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#DBEAFE',color:'#1D4ED8'}}>Primary Allocation</span>}
-                    {linkedPayment&&<span style={{padding:'3px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:'700',background:'#EDE9FE',color:'#6D28D9'}}>Linked: {linkedPayment.recipient}</span>}
-                  </div>
-                  <div style={{fontSize:'13px',color:'#475569',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'520px'}}>{m.title}</div>
-                  <div style={{display:'flex',gap:'12px',marginTop:'5px',flexWrap:'wrap'}}>
-                    {m.refNum&&<span style={{fontSize:'11px',color:'#94A3B8'}}>Ref: {m.refNum}</span>}
-                    {m.signedDate&&<span style={{fontSize:'11px',color:'#047857',fontWeight:'600'}}>✓ Signed {m.signedDate}</span>}
-                    {(m.notes||[]).length>0&&<span style={{fontSize:'11px',color:'#1D4ED8',fontWeight:'600'}}>💬 {m.notes.length} note{m.notes.length!==1?'s':''}</span>}
-                    {referencingPayments.length>0&&<span style={{fontSize:'11px',color:'#6D28D9',fontWeight:'600'}}>💳 {referencingPayments.length} payment{referencingPayments.length!==1?'s':''} reference this</span>}
-                    {m.docLink&&<a href={m.docLink} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{fontSize:'11px',color:'#1D4ED8',fontWeight:'600',textDecoration:'none'}}>View Document ↗</a>}
-                  </div>
-                </div>
-                <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'6px',flexShrink:0}}>
-                  {(parseFloat(m.amount)||0)>0&&<div style={{fontWeight:'700',fontSize:'16px',color:'#1E293B'}}>{fmt(parseFloat(m.amount)||0)}</div>}
-                </div>
-                <div style={{color:'#94A3B8',fontSize:'14px',flexShrink:0,marginTop:'2px'}}>{isExpanded?'▲':'▼'}</div>
-              </div>
-
-              {isExpanded&&(
-                <div style={{borderTop:'1px solid #F1F5F9',padding:'16px',display:'flex',flexDirection:'column',gap:'14px'}}>
-                  <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'10px',background:'#F8FAFC',borderRadius:'8px',padding:'12px'}}>
-                    {[['Reference #',m.refNum||'—'],['Date Signed',m.signedDate||'—'],['Amount',(parseFloat(m.amount)||0)>0?fmt(parseFloat(m.amount)):'—'],['Linked Funding',m.linkType==='primary'?'Primary Grant Allocation':linkedPayment?('Payment: '+linkedPayment.recipient):'—']].map(([l,v])=>(
-                      <div key={l}><div style={{fontSize:'10px',color:'#94A3B8',fontWeight:'600',marginBottom:'2px'}}>{l}</div><div style={{fontSize:'12px',fontWeight:'600',color:v==='—'?'#CBD5E1':'#1E293B'}}>{v}</div></div>
-                    ))}
-                  </div>
-                  {linkedPayment&&<div style={{fontSize:'12px',color:'#475569',background:'#EDE9FE',border:'1px solid #DDD6FE',borderRadius:'8px',padding:'8px 12px'}}><strong style={{color:'#6D28D9'}}>Linked payment:</strong> {linkedPayment.recipient} · {fmt(parseFloat(linkedPayment.amount)||0)} · {linkedPayment.fyYear} · {normPayStatus(linkedPayment.status)==='paid'?'Paid':'Unpaid'}</div>}
-                  {referencingPayments.length>0&&(
-                    <div style={{fontSize:'12px',color:'#475569',background:'#F8FAFC',border:'1px solid #E2E8F0',borderRadius:'8px',padding:'8px 12px'}}>
-                      <strong>Payments referencing this MOU:</strong>
-                      {referencingPayments.map(p=><div key={p.id} style={{marginTop:'4px'}}>💳 {p.recipient} · {fmt(parseFloat(p.amount)||0)} · {p.fyYear} · {normPayStatus(p.status)==='paid'?'Paid':'Unpaid'}</div>)}
-                    </div>
-                  )}
-
-                  <div>
-                    <div style={{fontSize:'11px',color:'#64748B',fontWeight:'700',letterSpacing:'0.05em',textTransform:'uppercase',marginBottom:'8px'}}>Notes ({(m.notes||[]).length})</div>
-                    {(m.notes||[]).length===0&&noteInputId!==m.id&&<p style={{fontSize:'12px',color:'#94A3B8',margin:'0 0 8px'}}>No notes yet.</p>}
-                    <div style={{display:'flex',flexDirection:'column',gap:'6px',marginBottom:'8px'}}>
-                      {(m.notes||[]).map(n=>(
-                        <div key={n.id} style={{display:'flex',gap:'10px',background:'#F8FAFC',borderRadius:'8px',padding:'10px 12px'}}>
-                          {n.authorPhoto?<img src={n.authorPhoto} alt="" style={{width:'24px',height:'24px',borderRadius:'50%',flexShrink:0}}/>:<div style={{width:'24px',height:'24px',borderRadius:'50%',background:'#E2E8F0',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',flexShrink:0}}>👤</div>}
-                          <div style={{flex:1}}><div style={{fontSize:'11px',color:'#64748B',marginBottom:'3px'}}><strong style={{color:'#334155'}}>{n.author}</strong> · {n.createdAt}</div><div style={{fontSize:'13px',color:'#1E293B'}}>{n.text}</div></div>
-                        </div>
-                      ))}
-                    </div>
-                    {noteInputId===m.id?(
-                      <div style={{display:'flex',gap:'8px',alignItems:'flex-end'}}>
-                        <textarea value={noteText} onChange={e=>setNoteText(e.target.value)} placeholder="Add a note about this MOU..." rows={2} style={{...inp,flex:1,resize:'none'}}/>
-                        <div style={{display:'flex',flexDirection:'column',gap:'5px'}}>
-                          <button onClick={()=>handleAddNote(m)} style={{background:'#1D4ED8',color:'white',border:'none',borderRadius:'7px',padding:'7px 12px',fontSize:'12px',fontWeight:'600',cursor:'pointer'}}>Save</button>
-                          <button onClick={()=>{setNoteInputId(null);setNoteText('');}} style={{border:'1px solid #E2E8F0',background:'white',borderRadius:'7px',padding:'7px 12px',fontSize:'12px',cursor:'pointer',color:'#64748B'}}>Cancel</button>
-                        </div>
-                      </div>
-                    ):(
-                      <button onClick={()=>{setNoteInputId(m.id);setNoteText('');}} style={{background:'none',border:'1px solid #E2E8F0',borderRadius:'7px',padding:'6px 12px',cursor:'pointer',color:'#64748B',fontSize:'12px'}}>+ Add note</button>
-                    )}
-                  </div>
-
-                  {canManage&&(
-                    <div style={{display:'flex',gap:'8px',paddingTop:'4px',borderTop:'1px solid #F1F5F9'}}>
-                      <button onClick={(e)=>{e.stopPropagation();startEdit(m);setExpandedId(null);setFormError('');}} style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:'7px',padding:'6px 12px',cursor:'pointer',color:'#1D4ED8',fontSize:'12px',fontWeight:'600'}}>Edit MOU</button>
-                      <button onClick={(e)=>{e.stopPropagation();handleDelete(m);}} style={{background:'none',border:'1px solid #FECACA',borderRadius:'7px',padding:'6px 12px',cursor:'pointer',color:'#991B1B',fontSize:'12px'}}>Delete</button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-
-// ── Activity Log Tab (Director only) ─────────────────────────────────────────
+// ── Activity Log Tab (Project Lead only) ─────────────────────────────────────
 function LogTab({logs}){
   const [filterAction,setFilterAction]=useState('');
   const [filterUser,setFilterUser]=useState('');
@@ -3469,7 +3185,7 @@ function LogTab({logs}){
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:'10px'}}>
         <div>
           <h2 style={{fontSize:'16px',fontWeight:'700',color:'#0F172A',margin:0}}>Activity Log</h2>
-          <p style={{fontSize:'13px',color:'#64748B',margin:'4px 0 0'}}>{filtered.length.toLocaleString()} entries · Director view only</p>
+          <p style={{fontSize:'13px',color:'#64748B',margin:'4px 0 0'}}>{filtered.length.toLocaleString()} entries · Project Lead view only</p>
         </div>
         <div style={{display:'flex',gap:'8px'}}>
           <select value={filterAction} onChange={e=>{setFilterAction(e.target.value);setPage(0);}} style={inp}>
@@ -3543,11 +3259,10 @@ function LogTab({logs}){
 
 const TABS=[
   {id:'overview',  label:'Overview',          icon:'📊'},
-  {id:'fiscal',    label:'Fiscal Health',     icon:'📋'},
+  {id:'fiscal',    label:'Financial Summary', icon:'📈'},
   {id:'events',    label:'Events',            icon:'📅'},
   {id:'payments',  label:'Partner Payments',  icon:'💳'},
   {id:'coeinvoices',label:'COE Invoices',     icon:'💰'},
-  {id:'mous',      label:'MOUs',              icon:'📝'},
   {id:'dataaudit', label:'Data & Audit',      icon:'📄'},
   {id:'log',       label:'Activity Log',      icon:'📋'},
 ];
@@ -3571,7 +3286,6 @@ function App(){
   const [amendments,setAmendments]=useState([]);
   const [accountGuide,setAccountGuide]=useState(DEFAULT_ACCOUNT_GUIDE);
   const [payments,setPayments]=useState([]);
-  const [mous,setMous]=useState([]);
   const [events,setEvents]=useState([]);
   const [coeInvoices,setCoeInvoices]=useState([]);
 
@@ -3622,11 +3336,10 @@ function App(){
     ];
     // Payments subscription (independent, doesn't block main load)
     const paymentsSub=_db.collection('payments').onSnapshot(s=>{setPayments(s.docs.map(d=>({...d.data(),id:d.id})));},e=>console.error('Payments:',e));
-    const mousSub=_db.collection('mous').onSnapshot(s=>{setMous(s.docs.map(d=>({...d.data(),id:d.id})));},e=>console.error('MOUs:',e));
     const eventsSub=_db.collection('events').onSnapshot(s=>{setEvents(s.docs.map(d=>({...d.data(),id:d.id})));},e=>console.error('Events:',e));
     const coeInvoicesSub=_db.collection('coeInvoices').onSnapshot(s=>{setCoeInvoices(s.docs.map(d=>({...d.data(),id:d.id})));},e=>console.error('COE Invoices:',e));
     const guideSub=_col('accountGuide').onSnapshot(s=>{setAccountGuide(s.exists&&s.data().items?s.data().items:DEFAULT_ACCOUNT_GUIDE);},e=>console.error('Guide:',e));
-    return()=>{subs.forEach(u=>u());paymentsSub();mousSub();eventsSub();coeInvoicesSub();guideSub();};
+    return()=>{subs.forEach(u=>u());paymentsSub();eventsSub();coeInvoicesSub();guideSub();};
   },[user,roleLoading]);
 
   useEffect(()=>{
@@ -3747,10 +3460,9 @@ function App(){
         <div style={{flex:1,overflowY:'auto',padding:'24px'}}>
           {activeTab==='overview'  &&<OverviewTab    txns={transactions} todos={todos} setTodos={updTodos} auditTags={auditTags} userRole={userRole} payments={payments} coeInvoices={coeInvoices} teamMembers={teamMembers} currentUid={user.uid} onJumpToAllocation={jumpToAllocation} accountGuide={accountGuide} setAccountGuide={updAccountGuide}/>}
           {activeTab==='fiscal'    &&<FiscalHealthTab txns={transactions} amendments={amendments} setAmendments={updAmendments} initialView={fiscalView} onViewChange={setFiscalView}/>}
-          {activeTab==='payments'  &&<PartnerPaymentsTab payments={payments} userRole={userRole} txns={transactions} mous={mous} events={events}/>}
+          {activeTab==='payments'  &&<PartnerPaymentsTab payments={payments} userRole={userRole} txns={transactions} events={events}/>}
           {activeTab==='coeinvoices'&&<CoeInvoicesTab invoices={coeInvoices} userRole={userRole} txns={transactions} payments={payments} events={events}/>}
           {activeTab==='events'    &&<EventsTab events={events} payments={payments} userRole={userRole}/>}
-          {activeTab==='mous'      &&<MousTab mous={mous} payments={payments} userRole={userRole}/>}
           {activeTab==='dataaudit' &&<DataAuditTab   txns={transactions} enrichments={enrichments} setEnrichments={updEnrichments} auditTags={auditTags} setAuditTags={updTags} jumpToId={jumpToId} clearJump={()=>setJumpToId(null)} initialView={dataAuditView} onViewChange={setDataAuditView} onJumpToEnrich={jumpToEnrich} userRole={userRole}/>}
           {activeTab==='log'       &&<LogTab logs={activityLogs}/>}
         </div>
@@ -3762,4 +3474,4 @@ function App(){
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
 </body>
-</html>
+</html
