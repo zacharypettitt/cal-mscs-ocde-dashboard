@@ -216,9 +216,9 @@ const ACCT_OPT=a=>`${ACCT_LABEL[a]} — ${a}`;
 const DEFAULT_ACCOUNT_GUIDE=[
   {account:"0110028",title:"Main Grant Revenue",when:"Incoming CDE allocation deposits (the 9 scheduled payments). Cash receipts land here as CR entries."},
   {account:"0110029",title:"Main Grant Expenses",when:"Primary grant spending — stipends, services, travel, materials paid from the CAL-MSCS allocation."},
-  {account:"0110030",title:"Indirect Costs",when:"Indirect cost charges against the primary allocation, tracked separately from direct 0110029 spending."},
+  {account:"0110030",title:"Indirect Costs",when:"Indirect cost charges against the primary allocation, tracked separately from direct 0110029 spending. (OCDE Accounting Only)"},
   {account:"0110237",title:"Reimbursed Revenue",when:"Reimbursement funds received from partner COEs/districts — pass-through revenue, separate from the CDE contract."},
-  {account:"0110238",title:"Reimbursed Expenses",when:"Payments made on behalf of partners that will be (or were) reimbursed. Partner-payment stipends flow here from FY24/25 onward."},
+  {account:"0110238",title:"Reimbursed Expenses",when:"Payments made to partners for activities that are reimbursed by other COE's. (CoPs, Leadership series, Coalition, etc). Partner-payment stipends flow here from FY24/25 onward."},
 ];
 
 // ── Budget data ───────────────────────────────────────────────────────────────
@@ -544,7 +544,7 @@ function OverviewTab({txns,todos,setTodos,auditTags,userRole,payments,coeInvoice
 
   return(
     <div style={{display:'flex',flexDirection:'column',gap:'22px'}}>
-      <AccountGuide guide={accountGuide} setGuide={setAccountGuide} userRole={userRole}/>
+      {(userRole==='director'||userRole==='admin_support')&&<AccountGuide guide={accountGuide} setGuide={setAccountGuide} userRole={userRole}/>}
       <div style={{display:'grid',gridTemplateColumns:'1fr 290px',gap:'22px'}}>
       <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:'10px'}}>
